@@ -1,12 +1,10 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
-#include <string>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Point_set_3.h>
 #include <vector>
 #include <CGAL/IO/write_ply_points.h>
-#include <CGAL/IO/read_ply_points.h>
 #include <CGAL/Kd_tree.h>
 #include <CGAL/Search_traits_3.h>
 #include <CGAL/Orthogonal_k_neighbor_search.h>
@@ -24,7 +22,7 @@ Point_set dilate(const Point_set& data, const Point_set& se, double threshold_sc
 int main()
 {
     // Create structuring element
-    Point_set se = fibonacci_sphere_multi_density(50, 1.5);
+    Point_set se = fibonacci_sphere_multi_density(100, 0.002);
 
     // Export structuring element as .ply
     std::ofstream out("fibonacci_sphere.ply", std::ios::binary);
@@ -39,7 +37,7 @@ int main()
 
     // Load input point cloud as Point_set
     Point_set data;
-    std::ifstream in("../input/Armadillo.ply", std::ios::binary);
+    std::ifstream in("../input/stanford_bunny.ply", std::ios::binary);
     if (!in) {
         std::cerr << "Error: cannot open input PLY file\n";
         return EXIT_FAILURE;
@@ -50,7 +48,7 @@ int main()
     }
 
     // Apply the dilation
-    Point_set dilation = dilate(data, se, 1.0, 10);
+    Point_set dilation = dilate(data, se, 1.0, 20);
 
     // Export the dilation as .ply
     std::ofstream dout("../output/dilation.ply", std::ios::binary);
@@ -107,13 +105,11 @@ static double estimate_average_knn_distance(const std::vector<Point>& pts,
     std::size_t count = 0;
 
     for (std::size_t i = 0; i < n; i += step) {
-        // Ask for k+1 neighbors: [itself, then k nearest others]
         KNN search(tree, pts[i], static_cast<unsigned int>(k + 1));
 
         auto it = search.begin();
         if (it == search.end()) continue;
 
-        // Skip itself
         ++it;
 
         std::size_t taken = 0;
@@ -136,19 +132,11 @@ Point_set dilate(const Point_set& data,
 {
     Point_set out;
 
-    // Seed output with data points
     std::vector<Point> out_pts;
-    out_pts.reserve(data.size() + data.size() * se.size()); // rough upper bound
+    out_pts.reserve(data.size() + data.size() * se.size());
 
     for (auto idx : data) {
         out_pts.push_back(data.point(idx));
-    }
-
-    // Edge cases
-    if (out_pts.empty() || se.empty()) {
-        out.reserve(out_pts.size());
-        for (const auto& p : out_pts) out.insert(p);
-        return out;
     }
 
     // Convert SE into offsets once
@@ -164,8 +152,8 @@ Point_set dilate(const Point_set& data,
     const double threshold  = threshold_scale * avg_knn;
     const double threshold2 = threshold * threshold;
 
-    // TODO: Calculate SE diameter for grouping
-    double se_diameter = 3.0;
+    // Calculate SE diameter for grouping
+    double se_diameter = 0.004; // TODO: calculate this thing
 
     // Split data into groups based on SE diameter
     std::vector<Point_set> groups = split_by_se_diameter(data, se_diameter);
@@ -173,59 +161,82 @@ Point_set dilate(const Point_set& data,
     const std::size_t total_groups = groups.size();
     std::size_t processed_groups = 0;
 
+    // Build initial KD-tree
+    Tree tree(out_pts.begin(), out_pts.end());
+    tree.build();
+
     // Process each group
     for (const auto& group : groups) {
-        // Build KD-tree on current output points
-        Tree tree(out_pts.begin(), out_pts.end());
-        tree.build();
-
-        // Collect new points from this group in parallel
-        std::vector<Point> group_new_points;
-        std::mutex group_mutex;
-
-        // Convert group to vector for parallel processing
+        // Convert group to vector
         std::vector<Point> group_points;
         group_points.reserve(group.size());
         for (auto gidx : group) {
             group_points.push_back(group.point(gidx));
         }
 
-        // Process points in group in parallel
-        #pragma omp parallel
-        {
-            std::vector<Point> thread_local_points;
+        std::vector<Point> group_new_points;
 
-            #pragma omp for schedule(dynamic)
-            for (std::size_t i = 0; i < group_points.size(); ++i) {
-                const Point& p = group_points[i];
+        group_new_points.reserve(group_points.size() * offsets.size());
 
+        if (group_points.size() < 50) {
+            // Small group: reuse existing tree without rebuilding
+            for (const Point& p : group_points) {
                 for (const auto& off : offsets) {
                     const Point c = p + off;
 
-                    // Search in existing tree
                     KNN search(tree, c, 1);
                     const auto it = search.begin();
                     if (it != search.end() && it->second > threshold2) {
-                        thread_local_points.push_back(c);
+                        group_new_points.push_back(c);
                     }
                 }
             }
+        } else {
+            std::mutex group_mutex;
 
-            // Merge thread-local results
-            if (!thread_local_points.empty()) {
-                std::lock_guard<std::mutex> lock(group_mutex);
-                group_new_points.insert(group_new_points.end(),
-                                       thread_local_points.begin(),
-                                       thread_local_points.end());
+            #pragma omp parallel
+            {
+                std::vector<Point> thread_local_points;
+
+                #pragma omp for schedule(dynamic)
+                for (std::size_t i = 0; i < group_points.size(); ++i) {
+                    const Point& p = group_points[i];
+
+                    for (const auto& off : offsets) {
+                        const Point c = p + off;
+
+                        KNN search(tree, c, 1);
+                        const auto it = search.begin();
+                        if (it != search.end() && it->second > threshold2) {
+                            thread_local_points.push_back(c);
+                        }
+                    }
+                }
+
+                if (!thread_local_points.empty()) {
+                    std::lock_guard<std::mutex> lock(group_mutex);
+                    group_new_points.insert(group_new_points.end(),
+                                           thread_local_points.begin(),
+                                           thread_local_points.end());
+                }
             }
         }
 
-        // Add all new points from this group to output
         out_pts.insert(out_pts.end(), group_new_points.begin(), group_new_points.end());
 
-        ++processed_groups;
+        if (group_points.size() < 50) {
+            // Small group: incrementally insert new points into existing tree
+            for (const Point& p : group_new_points) {
+                tree.insert(p);
+            }
+        } else {
+            // Large group: full rebuild to rebalance tree
+            tree.clear();
+            tree.insert(out_pts.begin(), out_pts.end());
+            tree.build();
+        }
 
-        // Progress update per group
+        ++processed_groups;
         if ((processed_groups % progress_every) == 0 || processed_groups == total_groups) {
             print_progress(processed_groups, total_groups);
         }
@@ -233,7 +244,6 @@ Point_set dilate(const Point_set& data,
 
     std::cout << "\n";
 
-    // Build Point_set result
     out.reserve(out_pts.size());
     for (const auto& pnt : out_pts) out.insert(pnt);
 
@@ -271,6 +281,7 @@ static void fibonacci_sphere_shell(Point_set& out,
 }
 
 // Generate multiple shells with constant surface-area-per-point density
+// TODO: Make it density based instead of amount of point based
 Point_set fibonacci_sphere_multi_density(std::size_t samples0 = 1000,
                                         double radius0 = 1.0)
 {
