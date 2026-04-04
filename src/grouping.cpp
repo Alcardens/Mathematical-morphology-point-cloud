@@ -21,82 +21,6 @@ typedef std::tuple<Point, Color> PC;
 typedef CGAL::Nth_of_tuple_property_map<0, PC> Point_map;
 typedef CGAL::Nth_of_tuple_property_map<1, PC> Color_map;
 
-namespace CGAL
-{
-    template<class F>
-    struct Output_rep< ::Color, F > {
-        const ::Color& c;
-        static const bool is_specialized = true;
-        Output_rep(const ::Color& c) : c(c) { }
-
-        std::ostream& operator()(std::ostream& out) const
-        {
-            if (IO::is_ascii(out))
-                out << int(c[0]) << " " << int(c[1]) << " " << int(c[2]) << " " << int(c[3]);
-            else
-                out.write(reinterpret_cast<const char*>(&c), sizeof(c));
-            return out;
-        }
-    };
-}
-
-static Color palette_color(std::size_t i);
-
-//int main()
-//{
-//    // Read input Point_set
-//    Point_set data;
-//    std::ifstream in("../input/Armadillo.ply", std::ios::binary);
-//    if (!in) {
-//        std::cerr << "Error: cannot open input PLY file\n";
-//        return EXIT_FAILURE;
-//    }
-//    if (!CGAL::IO::read_PLY(in, data)) {
-//        std::cerr << "Error: invalid or unsupported PLY file\n";
-//        return EXIT_FAILURE;
-//    }
-//
-//    // Split (use your SE diameter here; using 1.0 for now)
-//    const double D = 1.5;
-//    std::vector<Point_set> subsets = split_by_se_diameter(data, D);
-//    std::cerr << "Created " << subsets.size() << " subsets\n";
-//
-//    // Build vector of (Point, Color) for output
-//    std::vector<PC> out;
-//    out.reserve(data.size());
-//
-//    for (std::size_t si = 0; si < subsets.size(); ++si) {
-//        const Color col = palette_color(si);
-//        std::cout << subsets[si].size() << "\n";
-//
-//        for (auto idx : subsets[si]) {
-//            out.emplace_back(subsets[si].point(idx), col);
-//        }
-//    }
-//
-//    // Write one PLY with per-vertex colors (red, green, blue, alpha)
-//    std::ofstream f("subsets_colored.ply", std::ios::binary);
-//    if (!f) {
-//        std::cerr << "Error: cannot open output file\n";
-//        return EXIT_FAILURE;
-//    }
-//    CGAL::IO::set_binary_mode(f);
-//
-//    CGAL::IO::write_PLY_with_properties(
-//        f, out,
-//        CGAL::make_ply_point_writer(Point_map()),
-//        std::make_tuple(Color_map(),
-//                        CGAL::IO::PLY_property<unsigned char>("red"),
-//                        CGAL::IO::PLY_property<unsigned char>("green"),
-//                        CGAL::IO::PLY_property<unsigned char>("blue"),
-//                        CGAL::IO::PLY_property<unsigned char>("alpha"))
-//    );
-//
-//    std::cerr << "Wrote subsets_colored.ply\n";
-//    return EXIT_SUCCESS;
-//}
-
-
 struct CellKey {
     int64_t x, y, z;
     bool operator==(const CellKey& o) const { return x==o.x && y==o.y && z==o.z; }
@@ -104,7 +28,6 @@ struct CellKey {
 
 struct CellKeyHash {
     std::size_t operator()(const CellKey& k) const noexcept {
-        // decent 64-bit mix
         auto h = [](int64_t v) -> std::size_t {
             uint64_t x = static_cast<uint64_t>(v);
             x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
@@ -118,127 +41,109 @@ struct CellKeyHash {
     }
 };
 
-struct ColoredPoint {
-    Point p;
-    int color;
-};
-
-static CellKey cell_of(const Point& p, double cell_size)
-{
+static CellKey cell_of(const std::array<float,4>& p, double cell_size) {
     const double inv = 1.0 / cell_size;
     return CellKey{
-        static_cast<int64_t>(std::floor(p.x() * inv)),
-        static_cast<int64_t>(std::floor(p.y() * inv)),
-        static_cast<int64_t>(std::floor(p.z() * inv))
+        static_cast<int64_t>(std::floor(p[0] * inv)),
+        static_cast<int64_t>(std::floor(p[1] * inv)),
+        static_cast<int64_t>(std::floor(p[2] * inv))
     };
 }
 
-// Greedy grid-based coloring: points of same color are guaranteed > D apart.
-std::vector<Point_set> split_by_se_diameter(const Point_set& data, double D)
+static std::vector<std::array<float,4>>
+to_vec4(const Point_set& ps, const std::optional<std::string>& property)
 {
-    std::vector<Point_set> subsets;
-    if (data.empty() || D <= 0.0) return subsets;
+    std::vector<std::array<float,4>> out;
+    out.reserve(ps.size());
 
-    const double D2 = D * D;
+    auto prop_map_opt = property
+        ? ps.property_map<float>(*property)
+        : std::optional<Point_set::Property_map<float>>{};
+
+    for (auto it = ps.begin(); it != ps.end(); ++it) {
+        const Point& p = ps.point(*it);
+        float w = prop_map_opt.has_value() ? (*prop_map_opt)[*it] : 0.f;
+        out.push_back({ (float)p.x(), (float)p.y(), (float)p.z(), w });
+    }
+    return out;
+}
+
+static Point_set from_vec4(const std::vector<std::array<float,4>>& pts,
+                           const std::optional<std::string>& property)
+{
+    Point_set ps;
+    Point_set::Property_map<float> prop_map;
+    if (property)
+        prop_map = ps.add_property_map<float>(*property, 0.f).first;
+
+    for (const auto& p : pts) {
+        auto it = ps.insert(Point(p[0], p[1], p[2]));
+        if (property)
+            prop_map[*it] = p[3];
+    }
+    return ps;
+}
+
+std::vector<Point_set> split_by_se_diameter(
+    const Point_set&                  data,
+    double                            D,
+    const std::optional<std::string>& property)
+{
+    std::vector<Point_set> groups;
+    if (data.empty() || D <= 0.0) return groups;
+
+    const double D2        = D * D;
     const double cell_size = D;
 
-    // grid maps cell -> list of (point,color)
-    std::unordered_map<CellKey, std::vector<ColoredPoint>, CellKeyHash> grid;
-    grid.reserve(data.size());
+    // Convert to flat array — property value rides in w, 0 if absent
+    std::vector<std::array<float,4>> remaining = to_vec4(data, property);
 
-    std::vector<char> forbidden;
+    // Spatially sort on xyz for better cache locality
+    std::sort(remaining.begin(), remaining.end(),
+              [](const std::array<float,4>& a, const std::array<float,4>& b) {
+        if (a[0] != b[0]) return a[0] < b[0];
+        if (a[1] != b[1]) return a[1] < b[1];
+        return a[2] < b[2];
+    });
 
-    for (auto idx : data) {
-        const Point p = data.point(idx);
-        const CellKey ck = cell_of(p, cell_size);
+    while (!remaining.empty()) {
+        std::vector<std::array<float,4>> group_pts;
+        std::vector<std::array<float,4>> next_remaining;
+        next_remaining.reserve(remaining.size() / 2);
 
-        int max_color_seen = -1;
-        std::vector<int> neighbor_colors;
-        neighbor_colors.reserve(64);
+        std::unordered_map<CellKey, std::vector<std::array<float,4>>, CellKeyHash> grid;
+        grid.reserve(remaining.size() / 8);
 
-        // Check conflicts in 27 neighboring cells
-        for (int dx = -1; dx <= 1; ++dx) {
-            for (int dy = -1; dy <= 1; ++dy) {
-                for (int dz = -1; dz <= 1; ++dz) {
-                    CellKey nk{ck.x + dx, ck.y + dy, ck.z + dz};
-                    auto it = grid.find(nk);
-                    if (it == grid.end()) continue;
+        for (const auto& p : remaining) {
+            const CellKey ck = cell_of(p, cell_size);
+            bool conflicts   = false;
 
-                    for (const auto& cp : it->second) {
-                        if (CGAL::squared_distance(p, cp.p) <= D2) {
-                            neighbor_colors.push_back(cp.color);
-                            max_color_seen = std::max(max_color_seen, cp.color);
-                        }
-                    }
+            for (int dx = -1; dx <= 1 && !conflicts; ++dx)
+            for (int dy = -1; dy <= 1 && !conflicts; ++dy)
+            for (int dz = -1; dz <= 1 && !conflicts; ++dz) {
+                auto it = grid.find({ ck.x+dx, ck.y+dy, ck.z+dz });
+                if (it == grid.end()) continue;
+                for (const auto& gp : it->second) {
+                    double ddx = p[0]-gp[0], ddy = p[1]-gp[1], ddz = p[2]-gp[2];
+                    if (ddx*ddx + ddy*ddy + ddz*ddz <= D2) { conflicts = true; break; }
                 }
+            }
+
+            if (!conflicts) {
+                group_pts.push_back(p);
+                grid[ck].push_back(p);
+            } else {
+                next_remaining.push_back(p);
             }
         }
 
-        // Mark forbidden colors
-        forbidden.assign(static_cast<std::size_t>(max_color_seen + 2), 0);
-        for (int c : neighbor_colors)
-            forbidden[static_cast<std::size_t>(c)] = 1;
-
-        // Pick smallest available color
-        int color = 0;
-        while (color < static_cast<int>(forbidden.size()) &&
-               forbidden[static_cast<std::size_t>(color)]) {
-            ++color;
-        }
-
-        // Ensure enough Point_sets
-        if (color >= static_cast<int>(subsets.size()))
-            subsets.resize(static_cast<std::size_t>(color + 1));
-
-        // Insert into that subset
-        subsets[static_cast<std::size_t>(color)].insert(p);
-
-        // Record into grid
-        grid[ck].push_back(ColoredPoint{p, color});
+        groups.push_back(from_vec4(group_pts, property));
+        remaining = std::move(next_remaining);
     }
 
-    return subsets;
+    std::sort(groups.begin(), groups.end(), [](const Point_set& a, const Point_set& b) {
+        return a.size() > b.size();
+    });
+
+    return groups;
 }
-
-static Color palette_color(std::size_t i)
-{
-    static const Color pal[30] = {
-        {230,  25,  75, 255}, // red
-        { 60, 180,  75, 255}, // green
-        {255, 225,  25, 255}, // yellow
-        {  0, 130, 200, 255}, // blue
-        {245, 130,  48, 255}, // orange
-        {145,  30, 180, 255}, // purple
-        { 70, 240, 240, 255}, // cyan
-        {240,  50, 230, 255}, // magenta
-        {210, 245,  60, 255}, // lime
-        {250, 190, 190, 255}, // pink
-
-        {  0, 128, 128, 255}, // teal
-        {230, 190, 255, 255}, // lavender
-        {170, 110,  40, 255}, // brown
-        {255, 250, 200, 255}, // beige
-        {128,   0,   0, 255}, // maroon
-        {170, 255, 195, 255}, // mint
-        {128, 128,   0, 255}, // olive
-        {255, 215, 180, 255}, // apricot
-        {  0,   0, 128, 255}, // navy
-        {128, 128, 128, 255}, // gray
-
-        {255,  99,  71, 255}, // tomato
-        {154, 205,  50, 255}, // yellowgreen
-        {100, 149, 237, 255}, // cornflowerblue
-        {218, 112, 214, 255}, // orchid
-        { 64, 224, 208, 255}, // turquoise
-        {255, 140,   0, 255}, // dark orange
-        {138,  43, 226, 255}, // blue violet
-        { 46, 139,  87, 255}, // sea green
-        {255, 182, 193, 255}, // light pink
-        {105, 105, 105, 255}  // dim gray
-    };
-
-    return pal[i % 30];
-}
-
-
-
