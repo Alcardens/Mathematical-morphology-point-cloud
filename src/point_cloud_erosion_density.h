@@ -10,27 +10,27 @@ typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
 typedef K::Point_3                                          Point;
 typedef CGAL::Point_set_3<Point>                            Point_set;
 
-struct ErosionConfig {
-    float    cell_size;
-    float    min_dist;
+struct DensityErosionConfig {
+    float    max_dens;
+    float    min_dens;
+    float    increment;
     uint32_t table_size;
     uint32_t max_input;
     uint32_t max_output;
     uint32_t chunk_size;
 };
 
-class PointCloudEroder {
+class PointCloudDensityEroder {
 public:
-    explicit PointCloudEroder(const ErosionConfig& cfg);
-    ~PointCloudEroder();
+    explicit PointCloudDensityEroder(const DensityErosionConfig& cfg);
+    ~PointCloudDensityEroder();
 
-    void set_structuring_element(const std::vector<std::array<float, 3>>& se);
+    void set_structuring_element(const std::vector<std::array<float, 4>>& se);
 
     // Upload all input points, build the input hash, run the erosion shader.
     // Returns the number of surviving points.
-    uint32_t erode(const std::vector<std::array<float, 3>>& input);
-
-    uint32_t erode_score(const std::vector<std::array<float, 3>>& input);
+    uint32_t erode(const std::vector<std::array<float, 4>>& input);
+    uint32_t erode_score(const std::vector<std::array<float, 4>>& input);
 
     std::vector<std::array<float, 3>> get_result()      const;
     Point_set                         get_result_cgal() const;
@@ -39,14 +39,14 @@ public:
     Point_set                         get_result_cgal_with_scores() const;
 
 private:
-    ErosionConfig m_cfg;
-    uint32_t      m_result_count = 0;
-    uint32_t      m_se_count     = 0;
+    DensityErosionConfig m_cfg;
+    uint32_t             m_result_count = 0;
+    uint32_t             m_se_count     = 0;
 
     std::vector<std::array<float, 3>> m_result_accum;
     std::vector<std::array<float, 4>> m_score_accum;
 
-    uint32_t dispatch_erode(const std::vector<std::array<float, 3>>& input,
+    uint32_t dispatch_erode(const std::vector<std::array<float, 4>>& input,
                         GLuint prog, bool write_all);
 
     // Input hash — stores all input points

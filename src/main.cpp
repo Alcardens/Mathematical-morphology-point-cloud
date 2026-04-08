@@ -1,7 +1,7 @@
 #include "dilate.h"
 #include "erode.h"
 #include "density.h"
-#include "add.h"
+#include "boolean.h"
 #include "geometry.h"
 #include "old_algorithm.h"
 
@@ -53,7 +53,7 @@ int main()
 
     // ── Create structuring element ──────────────────────────────────────────
     // Point_set se = fibonacci_sphere_multi_density(1.0, 2.0);
-    // Point_set se = regular_line(1.0, 5);
+    // Point_set se = regular_line(0.02, 5);
     // Point_set se = regular_plane(1.0, 8);
     // Point_set se = multi_density_sphere(3.0, 0.8, 1.2, 0.1);
 
@@ -81,10 +81,15 @@ int main()
     // if (!in) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
     // if (!CGAL::IO::read_PLY(in, data)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
 
-    // Point_set data;
-    // std::ifstream in ("../input/Maastricht_AHN_transposed_segment.las", std::ios::binary);
-    // if (!in) { std::cerr << "Error: cannot open input LAS\n"; return EXIT_FAILURE; }
-    // if (!CGAL::IO::read_LAS(in, data)) { std::cerr << "Error: invalid LAS\n"; return EXIT_FAILURE; }
+    Point_set se;
+    std::ifstream sin ("../output/vasca_dilation.ply", std::ios::binary);
+    if (!sin) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
+    if (!CGAL::IO::read_PLY(sin, se)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
+    //
+    Point_set data;
+    std::ifstream in ("../input/vasca_left.las", std::ios::binary);
+    if (!in) { std::cerr << "Error: cannot open input LAS\n"; return EXIT_FAILURE; }
+    if (!CGAL::IO::read_LAS(in, data)) { std::cerr << "Error: invalid LAS\n"; return EXIT_FAILURE; }
     //
     // std::cout << "Loaded " << data.size() << " input points, "
     //           << se.size() << " SE points\n";
@@ -101,17 +106,21 @@ int main()
     //     std::cout << "Output: " << erosion.size() << " points\n";
     // }
 
-    Point_set cube = fibonacci_sphere_multi_density(1.0,  6.0);
-    Point_set se = fibonacci_sphere_multi_density(1.0, 1.0);
-    Point_set dilation = dilate_old(cube, se);
+    // Point_set cube = fibonacci_sphere_multi_density(1.0,  6.0);
+    // Point_set se = fibonacci_sphere_multi_density(1.0, 1.0);
+    // Point_set dilation = dilate_old(cube, se);
 
     // ── Erode ──────────────────────────────────────────────────────────────
-    // Point_set erosion = erode(data, se, 0.15);
+    // Point_set erosion = dilate(data, se, 0.15);
     // std::cout << "Output: " << erosion.size() << " points\n";
 
     // ── Add ────────────────────────────────────────────────────────────────
     // Point_set addition = add(cube, se, 0.8);
     // std::cout << "Output: " << addition.size() << " points\n";
+
+    // ── Add ────────────────────────────────────────────────────────────────
+    Point_set intersection = subtract(data, se, 0.03);
+    std::cout << "Output: " << intersection.size() << " points\n";
 
     // ── Density ────────────────────────────────────────────────────────────
     // Point_set density = density_estimate(data);
@@ -122,16 +131,16 @@ int main()
     // std::cout << "Output: " << dilation_density.size() << " points\n";
 
     // ── Export ─────────────────────────────────────────────────────────────
-    std::ofstream iout("../input/input.ply", std::ios::binary);
-    if (!iout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
-    if (!CGAL::IO::write_PLY(iout, cube)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
-
-    std::ofstream dout("../output/dilation_old.ply", std::ios::binary);
-    if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
-    if (!CGAL::IO::write_PLY(dout, dilation)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
+    // std::ofstream iout("../input/input.ply", std::ios::binary);
+    // if (!iout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
+    // if (!CGAL::IO::write_PLY(iout, cube)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
+    //
+    // std::ofstream dout("../output/dilation_old.ply", std::ios::binary);
+    // if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
+    // if (!CGAL::IO::write_PLY(dout, dilation)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     // ── Export ─────────────────────────────────────────────────────────────
-    // std::ofstream dout("../output/erosion.ply", std::ios::binary);
+    // std::ofstream dout("../output/vasca_dilation.ply", std::ios::binary);
     // if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
     // if (!CGAL::IO::write_PLY(dout, erosion)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
@@ -146,9 +155,9 @@ int main()
     // if (!CGAL::IO::write_PLY(dout, density)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     // ── Export ─────────────────────────────────────────────────────────────
-    // std::ofstream dout("../output/dilation_density.ply", std::ios::binary);
-    // if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
-    // if (!CGAL::IO::write_PLY(dout, dilation_density)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
+    std::ofstream dout("../output/subtraction.ply", std::ios::binary);
+    if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
+    if (!CGAL::IO::write_PLY(dout, intersection)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     glfwDestroyWindow(win);
     glfwTerminate();

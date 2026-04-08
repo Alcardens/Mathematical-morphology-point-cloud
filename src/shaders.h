@@ -230,9 +230,10 @@ layout(std430, binding = 4)          buffer OutCount { uint out_count; };
 uniform uint  u_table_size;
 uniform float u_cell_size;
 uniform float u_min_dist_sq;
-uniform uint  u_num_input;
+uniform uint  u_num_input;     // number of points in this chunk
 uniform uint  u_se_count;
 uniform uint  u_max_output;
+uniform uint  u_chunk_offset;  // index of first point in this chunk within in_pts
 
 const uint EMPTY_COORD = 0x7FFFFFFFu;
 
@@ -289,7 +290,7 @@ void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= u_num_input) return;
 
-    vec3 p = in_pts[id].xyz;
+    vec3 p = in_pts[u_chunk_offset + id].xyz;
 
     for (uint j = 0u; j < u_se_count; ++j) {
         if (!has_neighbor(p + se_pts[j].xyz))
@@ -316,9 +317,10 @@ layout(std430, binding = 4)          buffer OutCount { uint out_count; };
 uniform uint  u_table_size;
 uniform float u_cell_size;
 uniform float u_min_dist_sq;
-uniform uint  u_num_input;
+uniform uint  u_num_input;     // number of points in this chunk
 uniform uint  u_se_count;
 uniform uint  u_max_output;
+uniform uint  u_chunk_offset;  // index of first point in this chunk within in_pts
 
 const uint EMPTY_COORD = 0x7FFFFFFFu;
 
@@ -375,10 +377,8 @@ void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= u_num_input) return;
 
-    vec3 p = in_pts[id].xyz;
+    vec3 p = in_pts[u_chunk_offset + id].xyz;
 
-    // Count how many SE offsets have a neighbour in the input hash.
-    // No early exit — every offset must be tested to get an accurate ratio.
     uint matched = 0u;
     for (uint j = 0u; j < u_se_count; ++j) {
         if (has_neighbor(p + se_pts[j].xyz))
@@ -387,7 +387,184 @@ void main() {
 
     float score = float(matched) / float(u_se_count);
 
-    // Every point is written; w holds the match ratio.
+    uint slot = atomicAdd(out_count, 1u);
+    if (slot < u_max_output)
+        out_pts[slot] = vec4(p, score);
+}
+)GLSL";
+
+// ERODE_DENSITY
+inline const char* SRC_ERODE_DENSITY = R"GLSL(
+#version 430 core
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Cells    { uint cells[];   };
+layout(std430, binding = 1) readonly buffer InputPts { vec4 in_pts[];  };
+layout(std430, binding = 2) readonly buffer SE       { vec4 se_pts[];  };
+layout(std430, binding = 3)          buffer OutPts   { vec4 out_pts[]; };
+layout(std430, binding = 4)          buffer OutCount { uint out_count; };
+
+uniform uint  u_table_size;
+uniform float u_cell_size;
+uniform uint  u_num_input;     // number of points in this chunk
+uniform uint  u_se_count;
+uniform uint  u_max_output;
+uniform float u_min_dens;
+uniform float u_max_dens;
+uniform float u_increment;
+uniform uint  u_chunk_offset;  // index of first point in this chunk within in_pts
+
+const uint EMPTY_COORD = 0x7FFFFFFFu;
+
+ivec3 cell_coord(vec3 p, float cs) { return ivec3(floor(p / cs)); }
+uint  start_bucket(ivec3 c, uint table_size) {
+    uint h = uint(c.x) * 2246822519u ^ uint(c.y) * 3266489917u ^ uint(c.z) * 668265263u;
+    h ^= h >> 16u; h *= 0x45d9f3bu; h ^= h >> 16u;
+    return h & (table_size - 1u);
+}
+
+bool has_neighbor(vec3 q, float min_dist_sq, int shells) {
+    ivec3 base_cc = cell_coord(q, u_cell_size);
+
+    for (int dx = -shells; dx <= shells; ++dx)
+    for (int dy = -shells; dy <= shells; ++dy)
+    for (int dz = -shells; dz <= shells; ++dz) {
+        ivec3 nc   = base_cc + ivec3(dx, dy, dz);
+        uint  slot = start_bucket(nc, u_table_size);
+        for (uint probe = 0u; probe < u_table_size; ++probe) {
+            uint idx = slot * 4u;
+            uint cx  = cells[idx];
+            if (cx == EMPTY_COORD) break;
+            if (int(cx)            == nc.x &&
+                int(cells[idx+1u]) == nc.y &&
+                int(cells[idx+2u]) == nc.z) {
+                vec3 d = q - in_pts[cells[idx + 3u]].xyz;
+                if (dot(d, d) < min_dist_sq) return true;
+                break;
+            }
+            slot = (slot + 1u) & (u_table_size - 1u);
+        }
+    }
+    return false;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= u_num_input) return;
+
+    vec4 input_pt = in_pts[u_chunk_offset + id];
+    vec3 p        = input_pt.xyz;
+
+    // Clip input density to valid range
+    float input_density = clamp(input_pt.w, u_min_dens, u_max_dens);
+    float min_dist_sq    = input_density * input_density;
+    int   shells         = int(ceil(input_density / u_cell_size));
+
+    // Check each SE offset.
+    for (uint j = 0u; j < u_se_count; ++j) {
+        vec4 se_pt = se_pts[j];
+
+        if (abs(se_pt.w - input_density) > u_increment * 0.5)
+            continue;
+
+        if (!has_neighbor(p + se_pt.xyz, min_dist_sq, shells))
+            return;
+    }
+
+    uint slot = atomicAdd(out_count, 1u);
+    if (slot < u_max_output)
+        out_pts[slot] = vec4(p, 0);
+}
+)GLSL";
+
+// ERODE_DENSITY_SCORE
+inline const char* SRC_ERODE_DENSITY_SCORE = R"GLSL(
+#version 430 core
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Cells    { uint cells[];   };
+layout(std430, binding = 1) readonly buffer InputPts { vec4 in_pts[];  };
+layout(std430, binding = 2) readonly buffer SE       { vec4 se_pts[];  };
+layout(std430, binding = 3)          buffer OutPts   { vec4 out_pts[]; };
+layout(std430, binding = 4)          buffer OutCount { uint out_count; };
+
+uniform uint  u_table_size;
+uniform float u_cell_size;
+uniform float u_min_dist_sq;
+uniform uint  u_num_input;     // number of points in this chunk
+uniform uint  u_se_count;
+uniform uint  u_max_output;
+uniform float u_min_dens;
+uniform float u_max_dens;
+uniform float u_increment;
+uniform uint  u_chunk_offset;  // index of first point in this chunk within in_pts
+
+const uint EMPTY_COORD = 0x7FFFFFFFu;
+
+ivec3 cell_coord(vec3 p, float cs) { return ivec3(floor(p / cs)); }
+uint  start_bucket(ivec3 c, uint table_size) {
+    uint h = uint(c.x) * 2246822519u ^ uint(c.y) * 3266489917u ^ uint(c.z) * 668265263u;
+    h ^= h >> 16u; h *= 0x45d9f3bu; h ^= h >> 16u;
+    return h & (table_size - 1u);
+}
+
+bool has_neighbor(vec3 q, float min_dist_sq, int shells) {
+    ivec3 base_cc = cell_coord(q, u_cell_size);
+
+    for (int dx = -shells; dx <= shells; ++dx)
+    for (int dy = -shells; dy <= shells; ++dy)
+    for (int dz = -shells; dz <= shells; ++dz) {
+        ivec3 nc   = base_cc + ivec3(dx, dy, dz);
+        uint  slot = start_bucket(nc, u_table_size);
+        for (uint probe = 0u; probe < u_table_size; ++probe) {
+            uint idx = slot * 4u;
+            uint cx  = cells[idx];
+            if (cx == EMPTY_COORD) break;
+            if (int(cx)            == nc.x &&
+                int(cells[idx+1u]) == nc.y &&
+                int(cells[idx+2u]) == nc.z) {
+                vec3 d = q - in_pts[cells[idx + 3u]].xyz;
+                if (dot(d, d) < min_dist_sq) return true;
+                break;
+            }
+            slot = (slot + 1u) & (u_table_size - 1u);
+        }
+    }
+    return false;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= u_num_input) return;
+
+    vec4 input_pt = in_pts[u_chunk_offset + id];
+    vec3 p        = input_pt.xyz;
+
+    // Clip input density to valid range
+    float input_density = clamp(input_pt.w, u_min_dens, u_max_dens);
+    float min_dist_sq    = input_density * input_density;
+    int   shells         = int(ceil(input_density / u_cell_size));
+
+    // Check each SE offset.
+    uint matched = 0u;
+    uint applicable = 0u;
+    for (uint j = 0u; j < u_se_count; ++j) {
+        vec4 se_pt = se_pts[j];
+
+        if (abs(se_pt.w - input_density) > u_increment * 0.5)
+            continue;
+
+        applicable++;
+        if (has_neighbor(p + se_pt.xyz, min_dist_sq, shells))
+            matched++;
+    }
+
+    float score = 0.0
+
+    if (applicable > 0u) {
+        float score = float(matched) / float(applicable);
+    }
+
     uint slot = atomicAdd(out_count, 1u);
     if (slot < u_max_output)
         out_pts[slot] = vec4(p, score);
@@ -462,6 +639,170 @@ void main() {
         if (slot < u_max_output)
             out_pts[slot] = vec4(p, 0.0);
     }
+}
+)GLSL";
+
+// INTERSECT
+inline const char* SRC_INTERSECT = R"GLSL(
+#version 430 core
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Cells        { uint cells[];    };
+layout(std430, binding = 1) readonly buffer IntersectPts { vec4 is_pts[];   };
+layout(std430, binding = 2) readonly buffer OriginalPts  { vec4 or_pts[];   };
+layout(std430, binding = 3)          buffer OutPts       { vec4 out_pts[];  };
+layout(std430, binding = 4)          buffer OutCount     { uint out_count;  };
+
+uniform uint  u_table_size;
+uniform float u_cell_size;
+uniform float u_min_dist_sq;
+uniform uint  u_num_original;
+uniform uint  u_max_output;
+
+const uint EMPTY_COORD = 0x7FFFFFFFu;
+
+ivec3 cell_coord(vec3 p, float cs) { return ivec3(floor(p / cs)); }
+uint  start_bucket(ivec3 c, uint table_size) {
+    uint h = uint(c.x) * 2246822519u ^ uint(c.y) * 3266489917u ^ uint(c.z) * 668265263u;
+    h ^= h >> 16u; h *= 0x45d9f3bu; h ^= h >> 16u;
+    return h & (table_size - 1u);
+}
+
+bool has_neighbor(vec3 q) {
+    ivec3 base_cc = cell_coord(q, u_cell_size);
+
+    const int OFFSETS_X[27] = int[27](
+         0,
+         1, -1,  0,  0,  0,  0,
+         1,  1, -1, -1,  1,  1, -1, -1,  0,  0,  0,  0,
+         1,  1,  1,  1, -1, -1, -1, -1
+    );
+    const int OFFSETS_Y[27] = int[27](
+         0,
+         0,  0,  1, -1,  0,  0,
+         1, -1,  1, -1,  0,  0,  0,  0,  1,  1, -1, -1,
+         1,  1, -1, -1,  1,  1, -1, -1
+    );
+    const int OFFSETS_Z[27] = int[27](
+         0,
+         0,  0,  0,  0,  1, -1,
+         0,  0,  0,  0,  1, -1,  1, -1,  1, -1,  1, -1,
+         1, -1,  1, -1,  1, -1,  1, -1
+    );
+
+    for (int i = 0; i < 27; ++i) {
+        ivec3 nc   = base_cc + ivec3(OFFSETS_X[i], OFFSETS_Y[i], OFFSETS_Z[i]);
+        uint  slot = start_bucket(nc, u_table_size);
+        for (uint probe = 0u; probe < u_table_size; ++probe) {
+            uint idx = slot * 4u;
+            uint cx  = cells[idx];
+            if (cx == EMPTY_COORD) break;
+            if (int(cx)            == nc.x &&
+                int(cells[idx+1u]) == nc.y &&
+                int(cells[idx+2u]) == nc.z) {
+                vec3 d = q - is_pts[cells[idx + 3u]].xyz;
+                if (dot(d, d) < u_min_dist_sq) return true;
+                break;
+            }
+            slot = (slot + 1u) & (u_table_size - 1u);
+        }
+    }
+    return false;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= u_num_original) return;
+
+    vec3 p = or_pts[id].xyz;
+
+    if (!has_neighbor(p)) return;
+
+    uint slot = atomicAdd(out_count, 1u);
+    if (slot < u_max_output)
+        out_pts[slot] = vec4(p, 0.0);
+}
+)GLSL";
+
+// SUBTRACT
+inline const char* SRC_SUBTRACT = R"GLSL(
+#version 430 core
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Cells        { uint cells[];    };
+layout(std430, binding = 1) readonly buffer IntersectPts { vec4 is_pts[];   };
+layout(std430, binding = 2) readonly buffer OriginalPts  { vec4 or_pts[];   };
+layout(std430, binding = 3)          buffer OutPts       { vec4 out_pts[];  };
+layout(std430, binding = 4)          buffer OutCount     { uint out_count;  };
+
+uniform uint  u_table_size;
+uniform float u_cell_size;
+uniform float u_min_dist_sq;
+uniform uint  u_num_original;
+uniform uint  u_max_output;
+
+const uint EMPTY_COORD = 0x7FFFFFFFu;
+
+ivec3 cell_coord(vec3 p, float cs) { return ivec3(floor(p / cs)); }
+uint  start_bucket(ivec3 c, uint table_size) {
+    uint h = uint(c.x) * 2246822519u ^ uint(c.y) * 3266489917u ^ uint(c.z) * 668265263u;
+    h ^= h >> 16u; h *= 0x45d9f3bu; h ^= h >> 16u;
+    return h & (table_size - 1u);
+}
+
+bool has_neighbor(vec3 q) {
+    ivec3 base_cc = cell_coord(q, u_cell_size);
+
+    const int OFFSETS_X[27] = int[27](
+         0,
+         1, -1,  0,  0,  0,  0,
+         1,  1, -1, -1,  1,  1, -1, -1,  0,  0,  0,  0,
+         1,  1,  1,  1, -1, -1, -1, -1
+    );
+    const int OFFSETS_Y[27] = int[27](
+         0,
+         0,  0,  1, -1,  0,  0,
+         1, -1,  1, -1,  0,  0,  0,  0,  1,  1, -1, -1,
+         1,  1, -1, -1,  1,  1, -1, -1
+    );
+    const int OFFSETS_Z[27] = int[27](
+         0,
+         0,  0,  0,  0,  1, -1,
+         0,  0,  0,  0,  1, -1,  1, -1,  1, -1,  1, -1,
+         1, -1,  1, -1,  1, -1,  1, -1
+    );
+
+    for (int i = 0; i < 27; ++i) {
+        ivec3 nc   = base_cc + ivec3(OFFSETS_X[i], OFFSETS_Y[i], OFFSETS_Z[i]);
+        uint  slot = start_bucket(nc, u_table_size);
+        for (uint probe = 0u; probe < u_table_size; ++probe) {
+            uint idx = slot * 4u;
+            uint cx  = cells[idx];
+            if (cx == EMPTY_COORD) break;
+            if (int(cx)            == nc.x &&
+                int(cells[idx+1u]) == nc.y &&
+                int(cells[idx+2u]) == nc.z) {
+                vec3 d = q - is_pts[cells[idx + 3u]].xyz;
+                if (dot(d, d) < u_min_dist_sq) return true;
+                break;
+            }
+            slot = (slot + 1u) & (u_table_size - 1u);
+        }
+    }
+    return false;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= u_num_original) return;
+
+    vec3 p = or_pts[id].xyz;
+
+    if (has_neighbor(p)) return;
+
+    uint slot = atomicAdd(out_count, 1u);
+    if (slot < u_max_output)
+        out_pts[slot] = vec4(p, 0.0);
 }
 )GLSL";
 
