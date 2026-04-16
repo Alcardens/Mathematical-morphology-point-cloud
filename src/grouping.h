@@ -14,6 +14,7 @@ typedef CGAL::Point_set_3<Point>                             Point_set;
 std::vector<Point_set> split_by_se_diameter(
     const Point_set&           data,
     double                     D,
+    bool                       include_normal = false,
     const std::optional<std::string>& property = std::nullopt);
 
 #endif //GROUPING_H

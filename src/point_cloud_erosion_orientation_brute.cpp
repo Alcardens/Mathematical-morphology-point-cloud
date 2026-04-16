@@ -1,4 +1,4 @@
-#include "point_cloud_erosion_density.h"
+#include "point_cloud_erosion_orientation_brute.h"
 #include "shaders.h"
 #include <stdexcept>
 #include <iostream>
@@ -10,7 +10,7 @@ static void check_gl(const char* tag) {
         throw std::runtime_error(std::string(tag) + " GL error: " + std::to_string(e));
 }
 
-GLuint PointCloudDensityEroder::compile_compute(const char* src) {
+GLuint PointCloudBruteEroder::compile_compute(const char* src) {
     GLuint sh = glCreateShader(GL_COMPUTE_SHADER);
     glShaderSource(sh, 1, &src, nullptr);
     glCompileShader(sh);
@@ -32,7 +32,7 @@ GLuint PointCloudDensityEroder::compile_compute(const char* src) {
     return prog;
 }
 
-PointCloudDensityEroder::PointCloudDensityEroder(const DensityErosionConfig& cfg) : m_cfg(cfg) {
+PointCloudBruteEroder::PointCloudBruteEroder(const BruteErosionConfig& cfg) : m_cfg(cfg) {
     if (cfg.table_size == 0 || (cfg.table_size & (cfg.table_size - 1)) != 0)
         throw std::invalid_argument("table_size must be a power of two");
 
@@ -55,12 +55,18 @@ PointCloudDensityEroder::PointCloudDensityEroder(const DensityErosionConfig& cfg
     glBufferData(GL_SHADER_STORAGE_BUFFER, input_bytes, nullptr, GL_DYNAMIC_DRAW);
     check_gl("input pts alloc");
 
-    glGenBuffers(1, &m_ssbo_se);
+    glGenBuffers(1, &m_ssbo_se_ld);
+    glGenBuffers(1, &m_ssbo_se_hd);
 
     glGenBuffers(1, &m_ssbo_out_pts);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_pts);
     glBufferData(GL_SHADER_STORAGE_BUFFER, output_bytes, nullptr, GL_DYNAMIC_COPY);
     check_gl("output pts alloc");
+
+    glGenBuffers(1, &m_ssbo_out_norm);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_norm);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, output_bytes, nullptr, GL_DYNAMIC_COPY);
+    check_gl("output norm alloc");
 
     glGenBuffers(1, &m_ssbo_out_count);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_count);
@@ -69,39 +75,53 @@ PointCloudDensityEroder::PointCloudDensityEroder(const DensityErosionConfig& cfg
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-    m_prog_insert = compile_compute(SRC_INSERT);
-    m_prog_erode  = compile_compute(SRC_ERODE_DENSITY);
-    m_prog_erode_score = compile_compute(SRC_ERODE_DENSITY_SCORE);
+    m_prog_insert       = compile_compute(SRC_INSERT);
+    m_prog_erode        = compile_compute(SRC_ERODE_ORIENTATION_BRUTE);
+    m_prog_erode_score  = compile_compute(SRC_ERODE_ORIENTATION_BRUTE_SCORE);
 }
 
-PointCloudDensityEroder::~PointCloudDensityEroder() {
+PointCloudBruteEroder::~PointCloudBruteEroder() {
     glDeleteBuffers(1, &m_ssbo_input_cells);
     glDeleteBuffers(1, &m_ssbo_input_pts);
-    glDeleteBuffers(1, &m_ssbo_se);
+    glDeleteBuffers(1, &m_ssbo_se_ld);
+    glDeleteBuffers(1, &m_ssbo_se_hd);
     glDeleteBuffers(1, &m_ssbo_out_pts);
+    glDeleteBuffers(1, &m_ssbo_out_norm);
     glDeleteBuffers(1, &m_ssbo_out_count);
     glDeleteProgram(m_prog_insert);
     glDeleteProgram(m_prog_erode);
     glDeleteProgram(m_prog_erode_score);
 }
 
-void PointCloudDensityEroder::set_structuring_element(
-        const std::vector<std::array<float, 4>>& se)
+void PointCloudBruteEroder::set_structuring_element(
+        const std::vector<std::array<float, 3>>& se_ld, const std::vector<std::array<float, 3>>& se_hd)
 {
-    m_se_count = (uint32_t)se.size();
-    std::vector<float> buf;
-    buf.reserve(m_se_count * 4);
-    for (auto& p : se) {
-        buf.push_back(p[0]); buf.push_back(p[1]);
-        buf.push_back(p[2]); buf.push_back(p[3]);
+    m_se_ld_count = (uint32_t)se_ld.size();
+    std::vector<float> buf_ld;
+    buf_ld.reserve(m_se_ld_count * 4);
+    for (auto& p : se_ld) {
+        buf_ld.push_back(p[0]); buf_ld.push_back(p[1]);
+        buf_ld.push_back(p[2]); buf_ld.push_back(0.f);
     }
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_se);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_se_ld);
     glBufferData(GL_SHADER_STORAGE_BUFFER,
-                 (GLsizeiptr)buf.size() * sizeof(float), buf.data(), GL_STATIC_DRAW);
+                 (GLsizeiptr)buf_ld.size() * sizeof(float), buf_ld.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    m_se_hd_count = (uint32_t)se_hd.size();
+    std::vector<float> buf_hd;
+    buf_hd.reserve(m_se_hd_count * 4);
+    for (auto& p : se_hd) {
+        buf_hd.push_back(p[0]); buf_hd.push_back(p[1]);
+        buf_hd.push_back(p[2]); buf_hd.push_back(0.f);
+    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_se_hd);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+                 (GLsizeiptr)buf_hd.size() * sizeof(float), buf_hd.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
-void PointCloudDensityEroder::build_input_hash(uint32_t point_count) {
+void PointCloudBruteEroder::build_input_hash(uint32_t point_count) {
     // Clear the hash table to EMPTY_KEY (0xFFFFFFFF)
     uint32_t empty = 0x7FFFFFFFu;
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_input_cells);
@@ -114,7 +134,7 @@ void PointCloudDensityEroder::build_input_hash(uint32_t point_count) {
     // m_ssbo_input_pts to binding 1.
     glUseProgram(m_prog_insert);
     glUniform1ui(glGetUniformLocation(m_prog_insert, "u_table_size"),   m_cfg.table_size);
-    glUniform1f (glGetUniformLocation(m_prog_insert, "u_cell_size"),    m_cfg.min_dens);
+    glUniform1f (glGetUniformLocation(m_prog_insert, "u_cell_size"),    m_cfg.cell_size);
     glUniform1ui(glGetUniformLocation(m_prog_insert, "u_num_points"),   point_count);
     glUniform1ui(glGetUniformLocation(m_prog_insert, "u_start_offset"), 0u);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_ssbo_input_cells);
@@ -124,21 +144,21 @@ void PointCloudDensityEroder::build_input_hash(uint32_t point_count) {
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
-uint32_t PointCloudDensityEroder::erode(const std::vector<std::array<float, 4>>& input) {
+uint32_t PointCloudBruteEroder::erode(const std::vector<std::array<float, 3>>& input) {
     return dispatch_erode(input, m_prog_erode, /*write_all=*/false);
 }
 
-uint32_t PointCloudDensityEroder::erode_score(const std::vector<std::array<float, 4>>& input) {
+uint32_t PointCloudBruteEroder::erode_score(const std::vector<std::array<float, 3>>& input) {
     return dispatch_erode(input, m_prog_erode_score, /*write_all=*/true);
 }
 
 // Shared implementation used by both erode() and erode_score().
-uint32_t PointCloudDensityEroder::dispatch_erode(
-        const std::vector<std::array<float, 4>>& input,
+uint32_t PointCloudBruteEroder::dispatch_erode(
+        const std::vector<std::array<float, 3>>& input,
         GLuint prog,
         bool write_all)
 {
-    if (input.empty() || m_se_count == 0) return 0;
+    if (input.empty() || m_se_ld_count == 0 || m_se_hd_count == 0) return 0;
 
     uint32_t n = (uint32_t)std::min(input.size(), (size_t)m_cfg.max_input);
 
@@ -147,7 +167,7 @@ uint32_t PointCloudDensityEroder::dispatch_erode(
     buf.reserve(n * 4);
     for (uint32_t i = 0; i < n; ++i) {
         buf.push_back(input[i][0]); buf.push_back(input[i][1]);
-        buf.push_back(input[i][2]); buf.push_back(input[i][3]);
+        buf.push_back(input[i][2]); buf.push_back(0.f);
     }
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_input_pts);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
@@ -159,22 +179,27 @@ uint32_t PointCloudDensityEroder::dispatch_erode(
 
     m_result_accum.clear();
     m_score_accum.clear();
+    m_norm_accum.clear();
 
     glUseProgram(prog);
     glUniform1ui(glGetUniformLocation(prog, "u_table_size"),  m_cfg.table_size);
-    glUniform1f (glGetUniformLocation(prog, "u_cell_size"),   m_cfg.min_dens);
-    glUniform1f (glGetUniformLocation(prog, "u_min_dens"),    m_cfg.min_dens);
-    glUniform1f (glGetUniformLocation(prog, "u_max_dens"),    m_cfg.max_dens);
-    glUniform1f (glGetUniformLocation(prog, "u_increment"),   m_cfg.increment);
-    glUniform1ui(glGetUniformLocation(prog, "u_se_count"),    m_se_count);
+    glUniform1f (glGetUniformLocation(prog, "u_cell_size"),   m_cfg.cell_size);
+    glUniform1f (glGetUniformLocation(prog, "u_min_dist_ld"), m_cfg.min_dist_ld * m_cfg.min_dist_ld);
+    glUniform1f (glGetUniformLocation(prog, "u_min_dist_hd"), m_cfg.min_dist_hd * m_cfg.min_dist_hd);
+    glUniform1ui(glGetUniformLocation(prog, "u_se_ld_count"), m_se_ld_count);
+    glUniform1ui(glGetUniformLocation(prog, "u_se_ld_count"), m_se_hd_count);
     glUniform1ui(glGetUniformLocation(prog, "u_max_output"),  m_cfg.chunk_size);
-    glUniform1i (glGetUniformLocation(prog, "u_max_shell"),  m_cfg.max_shell);
+    glUniform1f (glGetUniformLocation(prog, "u_angle_ld"),    m_cfg.angle_ld);
+    glUniform1f (glGetUniformLocation(prog, "u_angle_hd"),    m_cfg.angle_hd);
+    glUniform1i (glGetUniformLocation(prog, "u_z_axis"),    m_cfg.z_axis);
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_ssbo_input_cells);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_ssbo_input_pts);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_ssbo_se);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_ssbo_out_pts);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_ssbo_out_count);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_ssbo_se_hd);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_ssbo_se_ld);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_ssbo_out_pts);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_ssbo_out_norm);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_ssbo_out_count);
 
     for (uint32_t offset = 0; offset < n; offset += m_cfg.chunk_size) {
         uint32_t this_chunk = std::min(m_cfg.chunk_size, n - offset);
@@ -202,17 +227,26 @@ uint32_t PointCloudDensityEroder::dispatch_erode(
 
         if (chunk_out > 0) {
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_pts);
-            const float* mapped = (const float*)glMapBufferRange(
+            const float* pts_mapped = (const float*)glMapBufferRange(
                 GL_SHADER_STORAGE_BUFFER, 0,
                 (GLsizeiptr)chunk_out * 4 * sizeof(float), GL_MAP_READ_BIT);
-            if (!mapped) throw std::runtime_error("glMapBufferRange failed (erode chunk)");
+            if (!pts_mapped) throw std::runtime_error("glMapBufferRange failed (pts)");
             if (write_all) {
                 for (uint32_t i = 0; i < chunk_out; ++i)
-                    m_score_accum.push_back({ mapped[i*4], mapped[i*4+1], mapped[i*4+2], mapped[i*4+3] });
+                    m_score_accum.push_back({ pts_mapped[i*4], pts_mapped[i*4+1], pts_mapped[i*4+2], pts_mapped[i*4+3] });
             } else {
                 for (uint32_t i = 0; i < chunk_out; ++i)
-                    m_result_accum.push_back({ mapped[i*4], mapped[i*4+1], mapped[i*4+2] });
+                    m_result_accum.push_back({ pts_mapped[i*4], pts_mapped[i*4+1], pts_mapped[i*4+2] });
             }
+            glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_norm);
+            const float* norm_mapped = (const float*)glMapBufferRange(
+                GL_SHADER_STORAGE_BUFFER, 0,
+                (GLsizeiptr)chunk_out * 4 * sizeof(float), GL_MAP_READ_BIT);
+            if (!norm_mapped) throw std::runtime_error("glMapBufferRange failed (norm)");
+            for (uint32_t i = 0; i < chunk_out; ++i)
+                m_norm_accum.push_back({ norm_mapped[i*4], norm_mapped[i*4+1], norm_mapped[i*4+2] });
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
         }
@@ -223,29 +257,36 @@ uint32_t PointCloudDensityEroder::dispatch_erode(
     return m_result_count;
 }
 
-std::vector<std::array<float, 3>> PointCloudDensityEroder::get_result() const {
-    return m_result_accum;
+PointCloudBruteEroder::OrientationErosionResult PointCloudBruteEroder::get_result() const {
+    return {m_result_accum, m_norm_accum};
 }
 
-std::vector<std::array<float, 4>> PointCloudDensityEroder::get_result_with_scores() const {
-    return m_score_accum;
+PointCloudBruteEroder::OrientationErosionScoreResult PointCloudBruteEroder::get_result_with_scores() const {
+    return {m_score_accum, m_norm_accum};
 }
 
-Point_set PointCloudDensityEroder::get_result_cgal() const {
-    auto pts = get_result();
+Point_set PointCloudBruteEroder::get_result_cgal() const {
+    auto result = get_result();
     Point_set ps;
-    for (auto& p : pts)
-        ps.insert(Point(p[0], p[1], p[2]));
+    auto norm_map = ps.add_property_map<Vector>("normal", Vector(0, 1, 0)).first;
+    for (size_t i = 0; i < result.coord.size(); ++i) {
+        auto it = ps.insert(Point(result.coord[i][0], result.coord[i][1], result.coord[i][2]));
+        if (i < result.normal.size())
+            norm_map[*it] = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
+    }
     return ps;
 }
 
-Point_set PointCloudDensityEroder::get_result_cgal_with_scores() const {
-    auto pts = get_result_with_scores();
+Point_set PointCloudBruteEroder::get_result_cgal_with_scores() const {
+    auto result = get_result_with_scores();
     Point_set ps;
     auto score_map = ps.add_property_map<float>("erosion_score", 0.f).first;
-    for (auto& p : pts) {
-        auto it = ps.insert(Point(p[0], p[1], p[2]));
-        score_map[*it] = p[3];
+    auto norm_map  = ps.add_property_map<Vector>("normal", Vector(0, 1, 0)).first;
+    for (size_t i = 0; i < result.coord.size(); ++i) {
+        auto it = ps.insert(Point(result.coord[i][0], result.coord[i][1], result.coord[i][2]));
+        score_map[*it] = result.coord[i][3];
+        if (i < result.normal.size())
+            norm_map[*it] = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
     }
     return ps;
 }

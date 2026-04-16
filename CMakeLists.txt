@@ -20,7 +20,10 @@ add_executable(Mathematical-morphology-point-cloud
         src/density_estimation.cpp
         src/point_cloud_dilation_density.cpp
         src/point_cloud_intersection.cpp
-        src/point_cloud_erosion_density.cpp)
+        src/point_cloud_erosion_density.cpp
+        src/point_cloud_dilation_orientation.cpp
+        src/point_cloud_erosion_orientation.cpp
+        src/point_cloud_erosion_orientation_brute.cpp)
 
 target_compile_definitions(Mathematical-morphology-point-cloud PRIVATE
         CGAL_LINKED_WITH_LASLIB

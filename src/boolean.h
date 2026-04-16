@@ -5,9 +5,16 @@
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Point_set_3.h>
 
+#include <string>
+#include <vector>
+#include <set>
+
 typedef CGAL::Exact_predicates_inexact_constructions_kernel  K;
 typedef K::Point_3                                           Point;
 typedef CGAL::Point_set_3<Point>                             Point_set;
+typedef CGAL::Search_traits_3<K>                             Traits;
+typedef CGAL::Kd_tree<Traits>                                Tree;
+typedef CGAL::Orthogonal_k_neighbor_search<Traits>           KNN;
 
 // ─── add ──────────────────────────────────────────────────────────────────
 Point_set add(const Point_set& original, const Point_set& addition, double min_dist)
@@ -167,5 +174,110 @@ Point_set subtract(const Point_set& original, const Point_set& intersection, dou
     Point_set result;
     for (auto& p : pts)
         result.insert(Point(p[0], p[1], p[2]));
+    return result;
+}
+
+// Collect property names of type T from a Point_set
+template <typename T>
+static std::vector<std::string> props_of(const Point_set& ps)
+{
+    std::vector<std::string> names;
+    for (const std::string& name : ps.properties()) {
+        if (name == "point") continue;
+        if (ps.property_map<T>(name).has_value())
+            names.push_back(name);
+    }
+    return names;
+}
+
+// Register, then copy one property type for one point
+template <typename T>
+static void handle_type(
+    const Point_set&             copy_to,
+    Point_set::Index             to_idx,
+    const Point_set&             copy_from,
+    Point_set::Index             from_idx,
+    Point_set&                   result,
+    Point_set::Index             dst_idx,
+    const std::set<std::string>& names)
+{
+    for (const std::string& name : names) {
+        auto dst_opt = result.property_map<T>(name);
+        if (!dst_opt.has_value()) continue;
+
+        auto from_opt = copy_from.property_map<T>(name);
+        if (from_opt.has_value()) {
+            (*dst_opt)[dst_idx] = (*from_opt)[from_idx];
+            continue;
+        }
+        auto to_opt = copy_to.property_map<T>(name);
+        if (to_opt.has_value())
+            (*dst_opt)[dst_idx] = (*to_opt)[to_idx];
+    }
+}
+
+// Register all names of type T on result
+template <typename T>
+static std::set<std::string> register_type(
+    const Point_set& copy_to,
+    const Point_set& copy_from,
+    Point_set&       result,
+    T                default_val)
+{
+    auto to_names   = props_of<T>(copy_to);
+    auto from_names = props_of<T>(copy_from);
+    std::set<std::string> names(to_names.begin(), to_names.end());
+    for (auto& n : from_names) names.insert(n);
+    for (const std::string& name : names)
+        result.add_property_map<T>(name, default_val);
+    return names;
+}
+
+// ─── copy_attributes ──────────────────────────────────────────────────────
+Point_set copy_attributes(const Point_set& copy_to, const Point_set& copy_from)
+{
+    Point_set result;
+
+    // ── 1. Register all property types on result ──────────────────────────
+    auto float_names  = register_type<float>   (copy_to, copy_from, result, 0.f);
+    auto double_names = register_type<double>  (copy_to, copy_from, result, 0.0);
+    auto int_names    = register_type<int>     (copy_to, copy_from, result, 0);
+    auto uint_names   = register_type<uint32_t>(copy_to, copy_from, result, 0u);
+    auto uchar_names  = register_type<uint8_t> (copy_to, copy_from, result, uint8_t(0));
+    auto vec_names    = register_type<Vector>  (copy_to, copy_from, result, Vector(0,1,0));
+
+    // ── 2. Build KD-tree on copy_from ─────────────────────────────────────
+    std::vector<Point> from_pts;
+    std::vector<Point_set::Index> from_indices;
+    from_pts.reserve(copy_from.size());
+    from_indices.reserve(copy_from.size());
+    for (auto it = copy_from.begin(); it != copy_from.end(); ++it) {
+        from_pts.push_back(copy_from.point(*it));
+        from_indices.push_back(*it);
+    }
+    Tree tree(from_pts.begin(), from_pts.end());
+
+    // ── 3. For each point in copy_to, find nearest and copy all properties
+    for (auto it = copy_to.begin(); it != copy_to.end(); ++it) {
+        const Point& p = copy_to.point(*it);
+
+        KNN search(tree, p, 1);
+        // Resolve nearest point to its index
+        const Point& nearest_pt = search.begin()->first;
+        Point_set::Index nearest_idx;
+        for (size_t i = 0; i < from_pts.size(); ++i) {
+            if (from_pts[i] == nearest_pt) { nearest_idx = from_indices[i]; break; }
+        }
+
+        auto dst_it = result.insert(p);
+
+        handle_type<float>   (copy_to, *it, copy_from, nearest_idx, result, *dst_it, float_names);
+        handle_type<double>  (copy_to, *it, copy_from, nearest_idx, result, *dst_it, double_names);
+        handle_type<int>     (copy_to, *it, copy_from, nearest_idx, result, *dst_it, int_names);
+        handle_type<uint32_t>(copy_to, *it, copy_from, nearest_idx, result, *dst_it, uint_names);
+        handle_type<uint8_t> (copy_to, *it, copy_from, nearest_idx, result, *dst_it, uchar_names);
+        handle_type<Vector>  (copy_to, *it, copy_from, nearest_idx, result, *dst_it, vec_names);
+    }
+
     return result;
 }

@@ -1,0 +1,80 @@
+#pragma once
+#include "gpu_spatial_hash.h"
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Point_set_3.h>
+#include <vector>
+#include <array>
+#include <cstdint>
+
+typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
+typedef K::Point_3                                          Point;
+typedef K::Vector_3                                         Vector;
+typedef CGAL::Point_set_3<Point>                            Point_set;
+
+struct BruteErosionConfig {
+    float    cell_size;
+    float    min_dist_ld;
+    float    min_dist_hd;
+    uint32_t table_size;
+    uint32_t max_input;
+    uint32_t max_output;
+    uint32_t chunk_size;
+    float    angle_ld;
+    float    angle_hd;
+    bool     z_axis;
+};
+
+class PointCloudBruteEroder {
+public:
+    explicit PointCloudBruteEroder(const BruteErosionConfig& cfg);
+    ~PointCloudBruteEroder();
+
+    void set_structuring_element(const std::vector<std::array<float, 3>>& se_ld,
+                                 const std::vector<std::array<float, 3>>& se_hd);
+
+    uint32_t erode(const std::vector<std::array<float, 3>>& input);
+    uint32_t erode_score(const std::vector<std::array<float, 3>>& input);
+
+    struct OrientationErosionResult      {std::vector<std::array<float, 3>> coord; std::vector<std::array<float, 3>> normal;};
+    struct OrientationErosionScoreResult {std::vector<std::array<float, 4>> coord; std::vector<std::array<float, 3>> normal;};
+
+    OrientationErosionResult        get_result()      const;
+    Point_set                       get_result_cgal() const;
+
+    OrientationErosionScoreResult   get_result_with_scores()      const;
+    Point_set                       get_result_cgal_with_scores() const;
+
+private:
+    BruteErosionConfig m_cfg;
+    uint32_t           m_result_count    = 0;
+    uint32_t           m_se_ld_count     = 0;
+    uint32_t           m_se_hd_count     = 0;
+
+    std::vector<std::array<float, 3>> m_result_accum;
+    std::vector<std::array<float, 4>> m_score_accum;
+
+    std::vector<std::array<float, 3>> m_norm_accum;
+
+    uint32_t dispatch_erode(const std::vector<std::array<float, 3>>& input,
+                        GLuint prog, bool write_all);
+
+    // Input hash — stores all input points
+    GLuint m_ssbo_input_cells  = 0;   // open-addressing table: uint[table_size * 2]
+    GLuint m_ssbo_input_pts    = 0;   // float4[max_input]
+
+    // Structuring element
+    GLuint m_ssbo_se_ld        = 0;   // float4[se_count]
+    GLuint m_ssbo_se_hd        = 0;   // float4[se_count]
+
+    // Output
+    GLuint m_ssbo_out_pts      = 0;   // float4[max_output]
+    GLuint m_ssbo_out_norm     = 0;   // float4[max_output]
+    GLuint m_ssbo_out_count    = 0;   // uint[1]
+
+    GLuint m_prog_insert       = 0;
+    GLuint m_prog_erode        = 0;
+    GLuint m_prog_erode_score  = 0;
+
+    static GLuint compile_compute(const char* src);
+    void build_input_hash(uint32_t point_count);
+};

@@ -192,3 +192,26 @@ Point_set multi_density_sphere(double radius = 5, double min_dist = 0.1, double 
 
     return points;
 }
+
+Point_set multi_density_plane(double min_dist = 0.1, double max_dist = 1.0, double increment = 0.1, int edge = 5)
+{
+    Point_set points;
+    auto density_map = points.add_property_map<float>("density", 0.f).first;
+
+    for (double density = min_dist;
+         density <= max_dist + increment * 0.5;  // 0.5 * increment tolerance for float rounding
+         density += increment)
+    {
+        int edge_points = edge / density;
+        Point_set plane = regular_plane(density, edge_points);
+
+        for (auto it = plane.begin(); it != plane.end(); ++it) {
+            const Point& p  = plane.point(*it);
+            auto dst_it     = points.insert(p);
+            density_map[*dst_it] = static_cast<float>(density);
+        }
+    }
+
+    return points;
+}
+

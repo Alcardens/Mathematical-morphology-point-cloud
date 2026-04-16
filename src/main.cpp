@@ -69,7 +69,26 @@ int main()
     // if (!CGAL::IO::write_PLY(bout, cube)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     // ── Create density plane  ─────────────────────────────────────────────────
-    // Point_set density_plane = plane_density(0.1, 1.0, 50, 200);
+    Point_set input;
+    std::ifstream in("../output/intersection.ply", std::ios::binary);
+    if (!in) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
+    if (!CGAL::IO::read_PLY(in, input)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
+
+    Point_set se;
+    std::ifstream is("../input/vasca_left.ply", std::ios::binary);
+    if (!is) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
+    if (!CGAL::IO::read_PLY(is, se)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
+
+    std::cout << "Loaded " << input.size() << " input points, "
+              << se.size() << " SE points\n";
+
+    Point_set output = copy_attributes(input, se);
+
+    std::cout << "Result " << output.size() << " output points";
+
+    std::ofstream dout("../output/copy_att.ply", std::ios::binary);
+    if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
+    if (!CGAL::IO::write_PLY(dout, output)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     // std::ofstream bout("density_plane.ply", std::ios::binary);
     // if (!bout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
@@ -81,15 +100,15 @@ int main()
     // if (!in) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
     // if (!CGAL::IO::read_PLY(in, data)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
 
-    Point_set se;
-    std::ifstream sin ("../output/vasca_dilation.ply", std::ios::binary);
-    if (!sin) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
-    if (!CGAL::IO::read_PLY(sin, se)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
-    //
-    Point_set data;
-    std::ifstream in ("../input/vasca_left.las", std::ios::binary);
-    if (!in) { std::cerr << "Error: cannot open input LAS\n"; return EXIT_FAILURE; }
-    if (!CGAL::IO::read_LAS(in, data)) { std::cerr << "Error: invalid LAS\n"; return EXIT_FAILURE; }
+    // Point_set se;
+    // std::ifstream sin ("../output/vasca_dilation.ply", std::ios::binary);
+    // if (!sin) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
+    // if (!CGAL::IO::read_PLY(sin, se)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE
+
+    // Point_set data;
+    // std::ifstream in ("../input/vasca_left.las", std::ios::binary);
+    // if (!in) { std::cerr << "Error: cannot open input LAS\n"; return EXIT_FAILURE; }
+    // if (!CGAL::IO::read_LAS(in, data)) { std::cerr << "Error: invalid LAS\n"; return EXIT_FAILURE; }
     //
     // std::cout << "Loaded " << data.size() << " input points, "
     //           << se.size() << " SE points\n";
@@ -119,8 +138,8 @@ int main()
     // std::cout << "Output: " << addition.size() << " points\n";
 
     // ── Add ────────────────────────────────────────────────────────────────
-    Point_set intersection = subtract(data, se, 0.03);
-    std::cout << "Output: " << intersection.size() << " points\n";
+    // Point_set intersection = subtract(data, se, 0.03);
+    // std::cout << "Output: " << intersection.size() << " points\n";
 
     // ── Density ────────────────────────────────────────────────────────────
     // Point_set density = density_estimate(data);
@@ -155,9 +174,9 @@ int main()
     // if (!CGAL::IO::write_PLY(dout, density)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     // ── Export ─────────────────────────────────────────────────────────────
-    std::ofstream dout("../output/subtraction.ply", std::ios::binary);
-    if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
-    if (!CGAL::IO::write_PLY(dout, intersection)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
+    // std::ofstream dout("../output/subtraction.ply", std::ios::binary);
+    // if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
+    // if (!CGAL::IO::write_PLY(dout, intersection)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     glfwDestroyWindow(win);
     glfwTerminate();

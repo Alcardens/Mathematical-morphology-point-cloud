@@ -1,25 +1,20 @@
-#include <iostream>
-#include <fstream>
+#include "grouping.h"
+
 #include <vector>
 #include <unordered_map>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <algorithm>
-#include <boost/property_map/property_map.hpp>
+#include <optional>
+#include <string>
 
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Point_set_3.h>
 
-#include <CGAL/IO/read_ply_points.h>
-#include <CGAL/IO/write_ply_points.h>
-#include <CGAL/IO/Color.h>
-
-#include "grouping.h"
-
-typedef std::array<unsigned char, 4> Color; // RGBA
-typedef std::tuple<Point, Color> PC;
-typedef CGAL::Nth_of_tuple_property_map<0, PC> Point_map;
-typedef CGAL::Nth_of_tuple_property_map<1, PC> Color_map;
+typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
+typedef K::Point_3                                          Point;
+typedef K::Vector_3                                         Vector;
+typedef CGAL::Point_set_3<Point>                            Point_set;
 
 struct CellKey {
     int64_t x, y, z;
@@ -41,45 +36,82 @@ struct CellKeyHash {
     }
 };
 
-static CellKey cell_of(const std::array<float,4>& p, double cell_size) {
+// Flat representation of a point for grouping:
+struct FlatPoint {
+    float xyz[3];
+    float prop;
+    float normal[3];
+};
+
+static CellKey cell_of(const FlatPoint& p, double cell_size) {
     const double inv = 1.0 / cell_size;
     return CellKey{
-        static_cast<int64_t>(std::floor(p[0] * inv)),
-        static_cast<int64_t>(std::floor(p[1] * inv)),
-        static_cast<int64_t>(std::floor(p[2] * inv))
+        static_cast<int64_t>(std::floor(p.xyz[0] * inv)),
+        static_cast<int64_t>(std::floor(p.xyz[1] * inv)),
+        static_cast<int64_t>(std::floor(p.xyz[2] * inv))
     };
 }
 
-static std::vector<std::array<float,4>>
-to_vec4(const Point_set& ps, const std::optional<std::string>& property)
+static std::vector<FlatPoint> to_flat(
+    const Point_set&                  ps,
+    bool                              include_normal,
+    const std::optional<std::string>& property)
 {
-    std::vector<std::array<float,4>> out;
+    std::vector<FlatPoint> out;
     out.reserve(ps.size());
 
-    auto prop_map_opt = property
+    auto prop_opt = property
         ? ps.property_map<float>(*property)
         : std::optional<Point_set::Property_map<float>>{};
 
+    // CGAL stores normals as a Vector_3 property named "normal"
+    auto norm_opt = include_normal
+        ? ps.property_map<Vector>("normal")
+        : std::optional<Point_set::Property_map<Vector>>{};
+
     for (auto it = ps.begin(); it != ps.end(); ++it) {
         const Point& p = ps.point(*it);
-        float w = prop_map_opt.has_value() ? (*prop_map_opt)[*it] : 0.f;
-        out.push_back({ (float)p.x(), (float)p.y(), (float)p.z(), w });
+        FlatPoint fp;
+        fp.xyz[0] = (float)p.x();
+        fp.xyz[1] = (float)p.y();
+        fp.xyz[2] = (float)p.z();
+        fp.prop   = prop_opt.has_value() ? (*prop_opt)[*it] : 0.f;
+        if (norm_opt.has_value()) {
+            const Vector& n = (*norm_opt)[*it];
+            fp.normal[0] = (float)n.x();
+            fp.normal[1] = (float)n.y();
+            fp.normal[2] = (float)n.z();
+        } else {
+            fp.normal[0] = 0.f;
+            fp.normal[1] = 1.f;
+            fp.normal[2] = 0.f;
+        }
+        out.push_back(fp);
     }
     return out;
 }
 
-static Point_set from_vec4(const std::vector<std::array<float,4>>& pts,
-                           const std::optional<std::string>& property)
+static Point_set from_flat(
+    const std::vector<FlatPoint>&     pts,
+    bool                              include_normal,
+    const std::optional<std::string>& property)
 {
     Point_set ps;
-    Point_set::Property_map<float> prop_map;
+
+    Point_set::Property_map<float>  prop_map;
+    Point_set::Property_map<Vector> norm_map;
+
     if (property)
         prop_map = ps.add_property_map<float>(*property, 0.f).first;
+    if (include_normal)
+        norm_map = ps.add_property_map<Vector>("normal", Vector(0, 1, 0)).first;
 
-    for (const auto& p : pts) {
-        auto it = ps.insert(Point(p[0], p[1], p[2]));
+    for (const auto& fp : pts) {
+        auto it = ps.insert(Point(fp.xyz[0], fp.xyz[1], fp.xyz[2]));
         if (property)
-            prop_map[*it] = p[3];
+            prop_map[*it] = fp.prop;
+        if (include_normal)
+            norm_map[*it] = Vector(fp.normal[0], fp.normal[1], fp.normal[2]);
     }
     return ps;
 }
@@ -87,6 +119,7 @@ static Point_set from_vec4(const std::vector<std::array<float,4>>& pts,
 std::vector<Point_set> split_by_se_diameter(
     const Point_set&                  data,
     double                            D,
+    bool                              include_normal,
     const std::optional<std::string>& property)
 {
     std::vector<Point_set> groups;
@@ -95,23 +128,21 @@ std::vector<Point_set> split_by_se_diameter(
     const double D2        = D * D;
     const double cell_size = D;
 
-    // Convert to flat array — property value rides in w, 0 if absent
-    std::vector<std::array<float,4>> remaining = to_vec4(data, property);
+    std::vector<FlatPoint> remaining = to_flat(data, include_normal, property);
 
-    // Spatially sort on xyz for better cache locality
     std::sort(remaining.begin(), remaining.end(),
-              [](const std::array<float,4>& a, const std::array<float,4>& b) {
-        if (a[0] != b[0]) return a[0] < b[0];
-        if (a[1] != b[1]) return a[1] < b[1];
-        return a[2] < b[2];
+              [](const FlatPoint& a, const FlatPoint& b) {
+        if (a.xyz[0] != b.xyz[0]) return a.xyz[0] < b.xyz[0];
+        if (a.xyz[1] != b.xyz[1]) return a.xyz[1] < b.xyz[1];
+        return a.xyz[2] < b.xyz[2];
     });
 
     while (!remaining.empty()) {
-        std::vector<std::array<float,4>> group_pts;
-        std::vector<std::array<float,4>> next_remaining;
+        std::vector<FlatPoint> group_pts;
+        std::vector<FlatPoint> next_remaining;
         next_remaining.reserve(remaining.size() / 2);
 
-        std::unordered_map<CellKey, std::vector<std::array<float,4>>, CellKeyHash> grid;
+        std::unordered_map<CellKey, std::vector<FlatPoint>, CellKeyHash> grid;
         grid.reserve(remaining.size() / 8);
 
         for (const auto& p : remaining) {
@@ -124,7 +155,9 @@ std::vector<Point_set> split_by_se_diameter(
                 auto it = grid.find({ ck.x+dx, ck.y+dy, ck.z+dz });
                 if (it == grid.end()) continue;
                 for (const auto& gp : it->second) {
-                    double ddx = p[0]-gp[0], ddy = p[1]-gp[1], ddz = p[2]-gp[2];
+                    double ddx = p.xyz[0]-gp.xyz[0];
+                    double ddy = p.xyz[1]-gp.xyz[1];
+                    double ddz = p.xyz[2]-gp.xyz[2];
                     if (ddx*ddx + ddy*ddy + ddz*ddz <= D2) { conflicts = true; break; }
                 }
             }
@@ -137,7 +170,7 @@ std::vector<Point_set> split_by_se_diameter(
             }
         }
 
-        groups.push_back(from_vec4(group_pts, property));
+        groups.push_back(from_flat(group_pts, include_normal, property));
         remaining = std::move(next_remaining);
     }
 
