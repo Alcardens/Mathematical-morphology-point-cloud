@@ -69,24 +69,18 @@ int main()
     // if (!CGAL::IO::write_PLY(bout, cube)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 
     // ── Create density plane  ─────────────────────────────────────────────────
-    Point_set input;
-    std::ifstream in("../output/intersection.ply", std::ios::binary);
-    if (!in) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
-    if (!CGAL::IO::read_PLY(in, input)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
+    Point_set input = hollow_cube(1, 100000);
 
-    Point_set se;
-    std::ifstream is("../input/vasca_left.ply", std::ios::binary);
-    if (!is) { std::cerr << "Error: cannot open input PLY\n"; return EXIT_FAILURE; }
-    if (!CGAL::IO::read_PLY(is, se)) { std::cerr << "Error: invalid PLY\n"; return EXIT_FAILURE; }
+    Point_set se = regular_plane(1, 10);
 
     std::cout << "Loaded " << input.size() << " input points, "
               << se.size() << " SE points\n";
 
-    Point_set output = copy_attributes(input, se);
+    Point_set output = erode_orientation_score_brute(input, se, 0.9, 90, true);
 
     std::cout << "Result " << output.size() << " output points";
 
-    std::ofstream dout("../output/copy_att.ply", std::ios::binary);
+    std::ofstream dout("../output/brute.ply", std::ios::binary);
     if (!dout) { std::cerr << "Error: cannot open output file\n"; return EXIT_FAILURE; }
     if (!CGAL::IO::write_PLY(dout, output)) { std::cerr << "Error: cannot write PLY\n"; return EXIT_FAILURE; }
 

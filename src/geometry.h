@@ -140,7 +140,7 @@ Point_set regular_plane(double distance = 1.0,
         {
             double x = start + i * distance;
             double z = start + j * distance;
-            points.insert(Point(x, z, 0));
+            points.insert(Point(x, 0, z));
         }
 
     return points;

@@ -187,7 +187,7 @@ uint32_t PointCloudBruteEroder::dispatch_erode(
     glUniform1f (glGetUniformLocation(prog, "u_min_dist_ld"), m_cfg.min_dist_ld * m_cfg.min_dist_ld);
     glUniform1f (glGetUniformLocation(prog, "u_min_dist_hd"), m_cfg.min_dist_hd * m_cfg.min_dist_hd);
     glUniform1ui(glGetUniformLocation(prog, "u_se_ld_count"), m_se_ld_count);
-    glUniform1ui(glGetUniformLocation(prog, "u_se_ld_count"), m_se_hd_count);
+    glUniform1ui(glGetUniformLocation(prog, "u_se_hd_count"), m_se_hd_count);
     glUniform1ui(glGetUniformLocation(prog, "u_max_output"),  m_cfg.chunk_size);
     glUniform1f (glGetUniformLocation(prog, "u_angle_ld"),    m_cfg.angle_ld);
     glUniform1f (glGetUniformLocation(prog, "u_angle_hd"),    m_cfg.angle_hd);
@@ -268,11 +268,11 @@ PointCloudBruteEroder::OrientationErosionScoreResult PointCloudBruteEroder::get_
 Point_set PointCloudBruteEroder::get_result_cgal() const {
     auto result = get_result();
     Point_set ps;
-    auto norm_map = ps.add_property_map<Vector>("normal", Vector(0, 1, 0)).first;
+    auto norm_map = ps.add_normal_map().first;
     for (size_t i = 0; i < result.coord.size(); ++i) {
         auto it = ps.insert(Point(result.coord[i][0], result.coord[i][1], result.coord[i][2]));
         if (i < result.normal.size())
-            norm_map[*it] = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
+            ps.normal(*it) = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
     }
     return ps;
 }
@@ -280,13 +280,13 @@ Point_set PointCloudBruteEroder::get_result_cgal() const {
 Point_set PointCloudBruteEroder::get_result_cgal_with_scores() const {
     auto result = get_result_with_scores();
     Point_set ps;
+    auto norm_map  = ps.add_normal_map().first;
     auto score_map = ps.add_property_map<float>("erosion_score", 0.f).first;
-    auto norm_map  = ps.add_property_map<Vector>("normal", Vector(0, 1, 0)).first;
     for (size_t i = 0; i < result.coord.size(); ++i) {
         auto it = ps.insert(Point(result.coord[i][0], result.coord[i][1], result.coord[i][2]));
         score_map[*it] = result.coord[i][3];
         if (i < result.normal.size())
-            norm_map[*it] = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
+            ps.normal(*it) = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
     }
     return ps;
 }

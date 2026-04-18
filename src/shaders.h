@@ -1138,7 +1138,7 @@ float score_ld(vec3 p, mat3 rot) {
         if (has_neighbor(p + rot * se_ld_pts[j].xyz, u_min_dist_ld))
             matched++;
     }
-    return float(matched) / float(u_se_count_ld);
+    return float(matched) / float(u_se_ld_count);
 }
 
 float score_hd(vec3 p, mat3 rot) {
@@ -1147,7 +1147,7 @@ float score_hd(vec3 p, mat3 rot) {
         if (has_neighbor(p + rot * se_hd_pts[j].xyz, u_min_dist_hd))
             matched++;
     }
-    return float(matched) / float(u_se_count_hd);
+    return float(matched) / float(u_se_hd_count);
 }
 
 void main() {
