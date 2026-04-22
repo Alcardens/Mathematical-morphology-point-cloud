@@ -27,6 +27,35 @@ static std::vector<Point> to_vec(const Point_set& ps)
     return out;
 }
 
+static double estimate_d_d(const std::vector<Point>& data_pts,
+                           const Tree&               data_tree,
+                           uint32_t                  sample_size = 500)
+{
+    const uint32_t n = (uint32_t)data_pts.size();
+    sample_size = std::min(sample_size, n);
+
+    // Draw a random sample of indices without replacement
+    std::vector<uint32_t> indices(n);
+    std::iota(indices.begin(), indices.end(), 0u);
+    std::mt19937 rng(42);
+    std::shuffle(indices.begin(), indices.end(), rng);
+    indices.resize(sample_size);
+
+    double sum = 0.0;
+    int    cnt = 0;
+    for (uint32_t idx : indices) {
+        KNN search(data_tree, data_pts[idx], 6);  // k=6: self + 5 neighbours
+        int i = 0;
+        for (auto it = search.begin(); it != search.end(); ++it, ++i) {
+            if (i == 0) continue;  // skip self
+            sum += std::sqrt(CGAL::to_double(it->second));
+            ++cnt;
+        }
+    }
+    return cnt > 0 ? sum / cnt : 1.0;
+}
+
+
 // ── dilate_old ────────────────────────────────────────────────────────────
 Point_set dilate_old(const Point_set& data, const Point_set& se)
 {
@@ -38,18 +67,7 @@ Point_set dilate_old(const Point_set& data, const Point_set& se)
     std::vector<Point> se_pts   = to_vec(se);
 
     Tree data_tree(data_pts.begin(), data_pts.end());
-    double d_d_sum = 0.0;
-    int    d_d_cnt = 0;
-    for (const Point& p : data_pts) {
-        KNN search(data_tree, p, 6);  // k=6: self + 5 neighbours
-        int i = 0;
-        for (auto it = search.begin(); it != search.end(); ++it, ++i) {
-            if (i == 0) continue;  // skip self, matches dists(:,2:end)
-            d_d_sum += std::sqrt(CGAL::to_double(it->second));
-            ++d_d_cnt;
-        }
-    }
-    double d_d = d_d_cnt > 0 ? d_d_sum / d_d_cnt : 1.0;
+    double d_d = estimate_d_d(data_pts, data_tree);
     double d_t = d_d / 1.5;
 
     std::cout << "d_t: " << d_t << std::endl;
@@ -121,18 +139,7 @@ Point_set erode_old(const Point_set& data, const Point_set& se)
 
     // Estimate average distance between points
     Tree data_tree(data_pts.begin(), data_pts.end());
-    double d_d_sum = 0.0;
-    int    d_d_cnt = 0;
-    for (const Point& p : data_pts) {
-        KNN search(data_tree, p, 6);
-        int i = 0;
-        for (auto it = search.begin(); it != search.end(); ++it, ++i) {
-            if (i == 0) continue;
-            d_d_sum += std::sqrt(CGAL::to_double(it->second));
-            ++d_d_cnt;
-        }
-    }
-    double d_d = d_d_cnt > 0 ? d_d_sum / d_d_cnt : 1.0;
+    double d_d = estimate_d_d(data_pts, data_tree);
     double d_t = d_d / 1.5;
 
     Point_set data_n_er;

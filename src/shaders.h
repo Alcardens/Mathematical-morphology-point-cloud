@@ -681,7 +681,8 @@ layout(std430, binding = 1) readonly buffer InputPts { vec4 in_pts[];   };
 layout(std430, binding = 2) readonly buffer NormVecs { vec4 norm_vec[]; };
 layout(std430, binding = 3) readonly buffer SE       { vec4 se_pts[];   };
 layout(std430, binding = 4)          buffer OutPts   { vec4 out_pts[];  };
-layout(std430, binding = 5)          buffer OutCount { uint out_count;  };
+layout(std430, binding = 5)          buffer OutNorm  { vec4 out_norm[]; };
+layout(std430, binding = 6)          buffer OutCount { uint out_count;  };
 
 uniform uint  u_table_size;
 uniform float u_cell_size;
@@ -771,8 +772,10 @@ void main() {
     }
 
     uint slot = atomicAdd(out_count, 1u);
-    if (slot < u_max_output)
+    if (slot < u_max_output) {
         out_pts[slot] = vec4(p, 0.0);
+        out_norm[slot] = vec4(n, 0.0);
+    }
 }
 )GLSL";
 
@@ -786,7 +789,8 @@ layout(std430, binding = 1) readonly buffer InputPts { vec4 in_pts[];   };
 layout(std430, binding = 2) readonly buffer NormVecs { vec4 norm_vec[]; };
 layout(std430, binding = 3) readonly buffer SE       { vec4 se_pts[];   };
 layout(std430, binding = 4)          buffer OutPts   { vec4 out_pts[];  };
-layout(std430, binding = 5)          buffer OutCount { uint out_count;  };
+layout(std430, binding = 5)          buffer OutNorm  { vec4 out_norm[]; };
+layout(std430, binding = 6)          buffer OutCount { uint out_count;  };
 
 uniform uint  u_table_size;
 uniform float u_cell_size;
@@ -879,8 +883,10 @@ void main() {
     float score = float(matched) / float(u_se_count);
 
     uint slot = atomicAdd(out_count, 1u);
-    if (slot < u_max_output)
+    if (slot < u_max_output) {
         out_pts[slot] = vec4(p, score);
+        out_norm[slot] = vec4(n, 0.0);
+    }
 }
 )GLSL";
 

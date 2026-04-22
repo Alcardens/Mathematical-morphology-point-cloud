@@ -67,6 +67,11 @@ PointCloudOrientationEroder::PointCloudOrientationEroder(const OrientationErosio
     glBufferData(GL_SHADER_STORAGE_BUFFER, output_bytes, nullptr, GL_DYNAMIC_COPY);
     check_gl("output pts alloc");
 
+    glGenBuffers(1, &m_ssbo_out_norm);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_norm);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, output_bytes, nullptr, GL_DYNAMIC_COPY);
+    check_gl("output norm alloc");
+
     glGenBuffers(1, &m_ssbo_out_count);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_count);
     glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(uint32_t), nullptr, GL_DYNAMIC_COPY);
@@ -85,6 +90,7 @@ PointCloudOrientationEroder::~PointCloudOrientationEroder() {
     glDeleteBuffers(1, &m_ssbo_norm);
     glDeleteBuffers(1, &m_ssbo_se);
     glDeleteBuffers(1, &m_ssbo_out_pts);
+    glDeleteBuffers(1, &m_ssbo_out_norm);
     glDeleteBuffers(1, &m_ssbo_out_count);
     glDeleteProgram(m_prog_insert);
     glDeleteProgram(m_prog_erode);
@@ -182,6 +188,7 @@ uint32_t PointCloudOrientationEroder::dispatch_erode(
 
     m_result_accum.clear();
     m_score_accum.clear();
+    m_norm_accum.clear();
 
     glUseProgram(prog);
     glUniform1ui(glGetUniformLocation(prog, "u_table_size"),  m_cfg.table_size);
@@ -195,7 +202,8 @@ uint32_t PointCloudOrientationEroder::dispatch_erode(
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_ssbo_norm);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_ssbo_se);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_ssbo_out_pts);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_ssbo_out_count);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_ssbo_out_norm);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_ssbo_out_count);
 
     for (uint32_t offset = 0; offset < n; offset += m_cfg.chunk_size) {
         uint32_t this_chunk = std::min(m_cfg.chunk_size, n - offset);
@@ -235,6 +243,15 @@ uint32_t PointCloudOrientationEroder::dispatch_erode(
                     m_result_accum.push_back({ mapped[i*4], mapped[i*4+1], mapped[i*4+2] });
             }
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_out_norm);
+            const float* norm_mapped = (const float*)glMapBufferRange(
+                GL_SHADER_STORAGE_BUFFER, 0,
+                (GLsizeiptr)chunk_out * 4 * sizeof(float), GL_MAP_READ_BIT);
+            if (!norm_mapped) throw std::runtime_error("glMapBufferRange failed (norm)");
+            for (uint32_t i = 0; i < chunk_out; ++i)
+                m_norm_accum.push_back({ norm_mapped[i*4], norm_mapped[i*4+1], norm_mapped[i*4+2] });
+            glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
         }
     }
@@ -244,29 +261,36 @@ uint32_t PointCloudOrientationEroder::dispatch_erode(
     return m_result_count;
 }
 
-std::vector<std::array<float, 3>> PointCloudOrientationEroder::get_result() const {
-    return m_result_accum;
+PointCloudOrientationEroder::OrientationErosionResult PointCloudOrientationEroder::get_result() const {
+    return {m_result_accum, m_norm_accum};
 }
 
-std::vector<std::array<float, 4>> PointCloudOrientationEroder::get_result_with_scores() const {
-    return m_score_accum;
+PointCloudOrientationEroder::OrientationErosionScoreResult PointCloudOrientationEroder::get_result_with_scores() const {
+    return {m_score_accum, m_norm_accum};
 }
 
 Point_set PointCloudOrientationEroder::get_result_cgal() const {
-    auto pts = get_result();
+    auto result = get_result();
     Point_set ps;
-    for (auto& p : pts)
-        ps.insert(Point(p[0], p[1], p[2]));
+    auto norm_map = ps.add_normal_map().first;
+    for (size_t i = 0; i < result.coord.size(); ++i) {
+        auto it = ps.insert(Point(result.coord[i][0], result.coord[i][1], result.coord[i][2]));
+        if (i < result.normal.size())
+            ps.normal(*it) = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
+    }
     return ps;
 }
 
 Point_set PointCloudOrientationEroder::get_result_cgal_with_scores() const {
-    auto pts = get_result_with_scores();
+    auto result = get_result_with_scores();
     Point_set ps;
+    auto norm_map  = ps.add_normal_map().first;
     auto score_map = ps.add_property_map<float>("erosion_score", 0.f).first;
-    for (auto& p : pts) {
-        auto it = ps.insert(Point(p[0], p[1], p[2]));
-        score_map[*it] = p[3];
+    for (size_t i = 0; i < result.coord.size(); ++i) {
+        auto it = ps.insert(Point(result.coord[i][0], result.coord[i][1], result.coord[i][2]));
+        score_map[*it] = result.coord[i][3];
+        if (i < result.normal.size())
+            ps.normal(*it) = Vector(result.normal[i][0], result.normal[i][1], result.normal[i][2]);
     }
     return ps;
 }
