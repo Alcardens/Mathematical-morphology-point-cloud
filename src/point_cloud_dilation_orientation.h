@@ -26,6 +26,7 @@ public:
     ~PointCloudOrientationDilator();
 
     void set_structuring_element(const std::vector<std::array<float, 3>>& se);
+    void upload_original(const std::vector<std::array<float, 3>>& original);
     void process_group(const std::vector<std::array<float, 3>>& group,
                        const std::vector<std::array<float, 3>>& normals);
 

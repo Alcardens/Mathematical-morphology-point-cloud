@@ -57,7 +57,7 @@ static double estimate_d_d(const std::vector<Point>& data_pts,
 
 
 // ── dilate_old ────────────────────────────────────────────────────────────
-Point_set dilate_old(const Point_set& data, const Point_set& se)
+Point_set dilate_old(const Point_set& data, const Point_set& se, double d_t = 0.0)
 {
     if (data.empty() || se.empty()) return data;
 
@@ -67,8 +67,12 @@ Point_set dilate_old(const Point_set& data, const Point_set& se)
     std::vector<Point> se_pts   = to_vec(se);
 
     Tree data_tree(data_pts.begin(), data_pts.end());
-    double d_d = estimate_d_d(data_pts, data_tree);
-    double d_t = d_d / 1.5;
+
+    if (d_t == 0.0)
+    {
+        double d_d = estimate_d_d(data_pts, data_tree);
+        d_t = d_d / 1.5;
+    }
 
     std::cout << "d_t: " << d_t << std::endl;
 
@@ -76,9 +80,9 @@ Point_set dilate_old(const Point_set& data, const Point_set& se)
 
     // Scroll points
     for (const Point& p : data_pts) {
-        double tx = CGAL::to_double(p.x()) - CGAL::to_double(se_pts[0].x());
-        double ty = CGAL::to_double(p.y()) - CGAL::to_double(se_pts[0].y());
-        double tz = CGAL::to_double(p.z()) - CGAL::to_double(se_pts[0].z());
+        double tx = CGAL::to_double(p.x());
+        double ty = CGAL::to_double(p.y());
+        double tz = CGAL::to_double(p.z());
 
         std::vector<Point> se_to_data;
         se_to_data.reserve(se_pts.size() - 1);
@@ -128,7 +132,7 @@ Point_set dilate_old(const Point_set& data, const Point_set& se)
 }
 
 // ── erode_old ─────────────────────────────────────────────────────────────
-Point_set erode_old(const Point_set& data, const Point_set& se)
+Point_set erode_old(const Point_set& data, const Point_set& se, double d_t = 0.0)
 {
     if (data.empty() || se.empty()) return data;
 
@@ -137,17 +141,21 @@ Point_set erode_old(const Point_set& data, const Point_set& se)
     std::vector<Point> data_pts = to_vec(data);
     std::vector<Point> se_pts   = to_vec(se);
 
-    // Estimate average distance between points
     Tree data_tree(data_pts.begin(), data_pts.end());
-    double d_d = estimate_d_d(data_pts, data_tree);
-    double d_t = d_d / 1.5;
+
+    // Estimate average distance between points
+    if (d_t == 0.0)
+    {
+        double d_d = estimate_d_d(data_pts, data_tree);
+        d_t = d_d / 1.5;
+    }
 
     Point_set data_n_er;
 
     for (const Point& p : data_pts) {
-        double tx = CGAL::to_double(p.x()) - CGAL::to_double(se_pts[0].x());
-        double ty = CGAL::to_double(p.y()) - CGAL::to_double(se_pts[0].y());
-        double tz = CGAL::to_double(p.z()) - CGAL::to_double(se_pts[0].z());
+        double tx = CGAL::to_double(p.x());
+        double ty = CGAL::to_double(p.y());
+        double tz = CGAL::to_double(p.z());
 
         std::vector<Point> se_data;
         se_data.reserve(se_pts.size() - 1);

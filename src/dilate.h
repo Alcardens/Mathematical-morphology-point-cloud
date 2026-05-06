@@ -98,19 +98,30 @@ Point_set dilate(const Point_set& data,
               << "  GPU: cells=" << cells_mb << " MB"
               << "  points=" << points_mb << " MB\n";
 
+    const uint32_t max_group_dispatch =
+        std::max(1u, 1'000'000u / std::max(1u, (uint32_t)se_offsets.size()));
+
     DilationConfig cfg;
     cfg.cell_size        = static_cast<float>(min_dist);
     cfg.min_dist         = static_cast<float>(min_dist);
     cfg.table_size       = table_size;
     cfg.max_total_points = max_output;
     cfg.max_candidates   = max_candidates;
-    cfg.max_input_group  = static_cast<uint32_t>(max_group_size);
+    cfg.max_input_group  = std::min(static_cast<uint32_t>(max_group_size), max_group_dispatch);
 
 
     // ── 5. Run dilation across all groups ─────────────────────────────────
     PointCloudDilator dilator(cfg);
     dilator.set_structuring_element(se_offsets);
 
+    std::vector<std::array<float, 3>> input_vec;
+    input_vec.reserve(data.size());
+    for (auto it = data.begin(); it != data.end(); ++it) {
+        const Point& p = data.point(*it);
+        input_vec.push_back({ (float)p.x(), (float)p.y(), (float)p.z() });
+    }
+
+    dilator.upload_original(input_vec);
 
     std::cout << "[dilate] " << groups.size() << " groups, "
               << se_offsets.size() << " SE offsets, "
@@ -123,11 +134,18 @@ Point_set dilate(const Point_set& data,
         if (grp.empty()) continue;
 
         auto pts = point_set_to_vec(grp);
-        dilator.process_group(pts);
 
-        // std::cout << "  group " << gi << "/" << groups.size()
-        //           << "  size=" << grp.size()
-        //           << "  total_out=" << dilator.output_point_count() << "\n";
+        for (uint32_t offset = 0; offset < (uint32_t)pts.size(); offset += max_group_dispatch) {
+            uint32_t this_chunk = std::min(max_group_dispatch, (uint32_t)pts.size() - offset);
+            std::vector<std::array<float, 3>> sub(pts.begin() + offset,
+                                                   pts.begin() + offset + this_chunk);
+            dilator.process_group(sub);
+        }
+
+        std::cout << "  group " << gi << "/" << groups.size()
+                  << "  size=" << grp.size()
+                  << "  sub_chunks=" << ((pts.size() + max_group_dispatch - 1) / max_group_dispatch)
+                  << "  total_out=" << dilator.output_point_count() << "\n";
     }
 
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
@@ -154,7 +172,7 @@ point_set_to_vec4(const Point_set& ps, const std::string& prop_name)
     return out;
 }
 
-Point_set dilate_density(const Point_set& data, const Point_set& se, const float increment)
+Point_set dilate_density(const Point_set& data, const Point_set& se, const float increment = 0.0)
 {
     if (data.empty() || se.empty())
         return Point_set{};
@@ -206,7 +224,7 @@ Point_set dilate_density(const Point_set& data, const Point_set& se, const float
 
     // ── 5. Split input into groups, carrying the density property ─────────
     std::vector<Point_set> groups =
-        split_by_se_diameter(data_with_density, se_diameter + min_dens, "density");
+        split_by_se_diameter(data_with_density, se_diameter + min_dens, false, "density");
 
     if (groups.empty()) return Point_set{};
 
@@ -234,29 +252,50 @@ Point_set dilate_density(const Point_set& data, const Point_set& se, const float
 
     std::chrono::steady_clock::time_point algo_begin = std::chrono::steady_clock::now();
 
+    const uint32_t max_group_dispatch =
+        std::max(1u, 1'000'000u / std::max(1u, (uint32_t)se_offsets.size()));
+
     // ── 7. Configure and run density-aware dilation ───────────────────────
     DensityDilationConfig cfg;
+    cfg.cell_size       = static_cast<float>(min_dens * 0.7);
     cfg.min_dens        = min_dens;
     cfg.max_dens        = max_dens;
     cfg.increment       = increment;
     cfg.table_size      = table_size;
     cfg.max_total_points = max_output;
     cfg.max_candidates  = max_candidates;
-    cfg.max_input_group = static_cast<uint32_t>(max_group_size);
+    cfg.max_input_group = std::min(static_cast<uint32_t>(max_group_size), max_group_dispatch);
 
     PointCloudDensityDilator dilator(cfg);
     dilator.set_structuring_element(se_offsets);
+
+    std::vector<std::array<float, 4>> input_vec4;
+    input_vec4.reserve(data_with_density.size());
+    auto d_opt = data_with_density.property_map<float>("density");
+    for (auto it = data_with_density.begin(); it != data_with_density.end(); ++it) {
+        const Point& p = data_with_density.point(*it);
+        float density  = d_opt.has_value() ? (*d_opt)[*it] : min_dens;
+        input_vec4.push_back({ (float)p.x(), (float)p.y(), (float)p.z(), density });
+    }
+    dilator.upload_original(input_vec4);
 
     for (size_t gi = 0; gi < groups.size(); ++gi) {
         const Point_set& grp = groups[gi];
         if (grp.empty()) continue;
 
         auto pts = point_set_to_vec4(grp, "density");
-        dilator.process_group(pts);
 
-        // std::cout << "  group " << gi << "/" << groups.size()
-        //           << "  size=" << grp.size()
-        //           << "  total_out=" << dilator.output_point_count() << "\n";
+        for (uint32_t offset = 0; offset < (uint32_t)pts.size(); offset += max_group_dispatch) {
+            uint32_t this_chunk = std::min(max_group_dispatch, (uint32_t)pts.size() - offset);
+            std::vector<std::array<float, 4>> sub(pts.begin() + offset,
+                                                   pts.begin() + offset + this_chunk);
+            dilator.process_group(sub);
+        }
+
+        std::cout << "  group " << gi << "/" << groups.size()
+                  << "  size=" << grp.size()
+                  << "  sub_chunks=" << ((pts.size() + max_group_dispatch - 1) / max_group_dispatch)
+                  << "  total_out=" << dilator.output_point_count() << "\n";
     }
 
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
@@ -348,6 +387,9 @@ Point_set dilate_orientation(const Point_set& data,
     // ── 5. Run dilation ───────────────────────────────────────────────────
     std::chrono::steady_clock::time_point algo_begin = std::chrono::steady_clock::now();
 
+    const uint32_t max_group_dispatch =
+        std::max(1u, 1'000'000u / std::max(1u, (uint32_t)se_offsets.size()));
+
     if (has_normals) {
         // Orientation-aware dilation
         OrientationDilationConfig cfg;
@@ -356,10 +398,19 @@ Point_set dilate_orientation(const Point_set& data,
         cfg.table_size       = table_size;
         cfg.max_total_points = max_output;
         cfg.max_candidates   = max_candidates;
-        cfg.max_input_group  = static_cast<uint32_t>(max_group_size);
+        cfg.max_input_group  = std::min(static_cast<uint32_t>(max_group_size), max_group_dispatch);
 
         PointCloudOrientationDilator dilator(cfg);
         dilator.set_structuring_element(se_offsets);
+
+        std::vector<std::array<float, 3>> input_vec;
+        input_vec.reserve(data.size());
+        for (auto it = data.begin(); it != data.end(); ++it) {
+            const Point& p = data.point(*it);
+            input_vec.push_back({ (float)p.x(), (float)p.y(), (float)p.z() });
+        }
+
+        dilator.upload_original(input_vec);
 
         std::cout << "[dilate_orientation] " << groups.size() << " groups, "
                   << se_offsets.size() << " SE offsets, min_dist=" << min_dist << "\n";
@@ -370,8 +421,22 @@ Point_set dilate_orientation(const Point_set& data,
 
             auto pts     = point_set_to_vec(grp);
             auto normals = point_set_to_normals(grp);
-            dilator.process_group(pts, normals);
+
+            for (uint32_t offset = 0; offset < (uint32_t)pts.size(); offset += max_group_dispatch) {
+                uint32_t this_chunk = std::min(max_group_dispatch, (uint32_t)pts.size() - offset);
+                std::vector<std::array<float, 3>> sub_pts(pts.begin() + offset,
+                                                           pts.begin() + offset + this_chunk);
+                std::vector<std::array<float, 3>> sub_nrm(normals.begin() + offset,
+                                                           normals.begin() + offset + this_chunk);
+                dilator.process_group(sub_pts, sub_nrm);
+            }
+
+            std::cout << "  group " << gi << "/" << groups.size()
+                      << "  size=" << grp.size()
+                      << "  sub_chunks=" << ((pts.size() + max_group_dispatch - 1) / max_group_dispatch)
+                      << "  total_out=" << dilator.output_point_count() << "\n";
         }
+
 
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
         std::cout << "Total time  = " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count()      << " [ms]\n";
@@ -386,10 +451,19 @@ Point_set dilate_orientation(const Point_set& data,
         cfg.table_size       = table_size;
         cfg.max_total_points = max_output;
         cfg.max_candidates   = max_candidates;
-        cfg.max_input_group  = static_cast<uint32_t>(max_group_size);
+        cfg.max_input_group  = std::min(static_cast<uint32_t>(max_group_size), max_group_dispatch);
 
         PointCloudDilator dilator(cfg);
         dilator.set_structuring_element(se_offsets);
+
+        std::vector<std::array<float, 3>> input_vec;
+        input_vec.reserve(data.size());
+        for (auto it = data.begin(); it != data.end(); ++it) {
+            const Point& p = data.point(*it);
+            input_vec.push_back({ (float)p.x(), (float)p.y(), (float)p.z() });
+        }
+
+        dilator.upload_original(input_vec);
 
         std::cout << "[dilate_orientation] " << groups.size() << " groups, "
                   << se_offsets.size() << " SE offsets, min_dist=" << min_dist
@@ -398,8 +472,22 @@ Point_set dilate_orientation(const Point_set& data,
         for (size_t gi = 0; gi < groups.size(); ++gi) {
             const Point_set& grp = groups[gi];
             if (grp.empty()) continue;
-            dilator.process_group(point_set_to_vec(grp));
+
+            auto pts = point_set_to_vec(grp);
+
+            for (uint32_t offset = 0; offset < (uint32_t)pts.size(); offset += max_group_dispatch) {
+                uint32_t this_chunk = std::min(max_group_dispatch, (uint32_t)pts.size() - offset);
+                std::vector<std::array<float, 3>> sub(pts.begin() + offset,
+                                                       pts.begin() + offset + this_chunk);
+                dilator.process_group(sub);
+            }
+
+            std::cout << "  group " << gi << "/" << groups.size()
+                      << "  size=" << grp.size()
+                      << "  sub_chunks=" << ((pts.size() + max_group_dispatch - 1) / max_group_dispatch)
+                      << "  total_out=" << dilator.output_point_count() << "\n";
         }
+
 
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
         std::cout << "Total time  = " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count()      << " [ms]\n";

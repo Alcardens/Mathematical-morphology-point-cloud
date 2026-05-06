@@ -129,6 +129,24 @@ uint32_t GPUSpatialHash::upload_points(const std::vector<std::array<float, 3>>& 
     return n;
 }
 
+uint32_t GPUSpatialHash::upload_points_4(const std::vector<std::array<float, 4>>& pts) {
+    uint32_t n = std::min((uint32_t)pts.size(), remaining());
+    std::vector<float> buf;
+    buf.reserve(n * 4);
+    for (uint32_t i = 0; i < n; ++i) {
+        buf.push_back(pts[i][0]); buf.push_back(pts[i][1]);
+        buf.push_back(pts[i][2]); buf.push_back(pts[i][3]);
+    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo_points);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER,
+                    (GLintptr)(m_point_count * 4 * sizeof(float)),
+                    (GLsizeiptr)buf.size() * sizeof(float), buf.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    dispatch_insert(m_point_count, n);
+    m_point_count += n;
+    return n;
+}
+
 void GPUSpatialHash::bind(GLuint cells_binding, GLuint points_binding) const {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, cells_binding,  m_ssbo_cells);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, points_binding, m_ssbo_points);

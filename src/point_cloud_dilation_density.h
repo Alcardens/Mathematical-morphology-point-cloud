@@ -12,6 +12,7 @@ typedef K::Point_3                                          Point;
 typedef CGAL::Point_set_3<Point>                            Point_set;
 
 struct DensityDilationConfig {
+    float    cell_size;
     float    max_dens;
     float    min_dens;
     float    increment;
@@ -27,6 +28,7 @@ public:
     ~PointCloudDensityDilator();
 
     void set_structuring_element(const std::vector<std::array<float, 4>>& se);
+    void upload_original(const std::vector<std::array<float, 4>>& original);
     void process_group(const std::vector<std::array<float, 4>>& group);
 
     uint32_t output_point_count() const { return m_hash.point_count(); }

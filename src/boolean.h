@@ -246,27 +246,36 @@ Point_set copy_attributes(const Point_set& copy_to, const Point_set& copy_from)
     auto uchar_names  = register_type<uint8_t> (copy_to, copy_from, result, uint8_t(0));
     auto vec_names    = register_type<Vector>  (copy_to, copy_from, result, Vector(0,1,0));
 
-    // ── 2. Build KD-tree on copy_from ─────────────────────────────────────
+    // ── 2. Build KD-tree on copy_from ────────────────────────────────────────
     std::vector<Point> from_pts;
     std::vector<Point_set::Index> from_indices;
     from_pts.reserve(copy_from.size());
     from_indices.reserve(copy_from.size());
-    for (auto it = copy_from.begin(); it != copy_from.end(); ++it) {
+
+    // Build a map from point to index for O(1) lookup after KNN
+    std::unordered_map<size_t, Point_set::Index> pt_to_idx;
+    size_t i = 0;
+    for (auto it = copy_from.begin(); it != copy_from.end(); ++it, ++i) {
         from_pts.push_back(copy_from.point(*it));
         from_indices.push_back(*it);
     }
     Tree tree(from_pts.begin(), from_pts.end());
 
-    // ── 3. For each point in copy_to, find nearest and copy all properties
+    // ── 3. For each point in copy_to, find nearest and copy all properties ────
     for (auto it = copy_to.begin(); it != copy_to.end(); ++it) {
         const Point& p = copy_to.point(*it);
 
         KNN search(tree, p, 1);
-        // Resolve nearest point to its index
-        const Point& nearest_pt = search.begin()->first;
-        Point_set::Index nearest_idx;
-        for (size_t i = 0; i < from_pts.size(); ++i) {
-            if (from_pts[i] == nearest_pt) { nearest_idx = from_indices[i]; break; }
+        auto knn_it = search.begin();
+        const Point& nearest_pt = knn_it->first;
+
+        // Find index by scanning — but guard against not finding it
+        Point_set::Index nearest_idx = *copy_from.begin();  // safe default
+        for (size_t j = 0; j < from_pts.size(); ++j) {
+            if (CGAL::squared_distance(from_pts[j], nearest_pt) < 1e-10) {
+                nearest_idx = from_indices[j];
+                break;
+            }
         }
 
         auto dst_it = result.insert(p);

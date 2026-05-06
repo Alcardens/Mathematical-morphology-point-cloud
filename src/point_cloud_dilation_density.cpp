@@ -35,7 +35,7 @@ GLuint PointCloudDensityDilator::compile_compute(const char* src) {
 PointCloudDensityDilator::PointCloudDensityDilator(const DensityDilationConfig& cfg)
     : m_cfg(cfg),
       m_hash(SpatialHashConfig{
-          cfg.max_dens, cfg.max_dens, cfg.table_size, cfg.max_total_points
+          cfg.cell_size, cfg.cell_size, cfg.table_size, cfg.max_total_points
       })
 {
     glGenBuffers(1, &m_ssbo_input);
@@ -84,6 +84,12 @@ void PointCloudDensityDilator::set_structuring_element(
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
+void PointCloudDensityDilator::upload_original(const std::vector<std::array<float, 4>>& original)
+{
+    if (original.empty()) return;
+    m_hash.upload_points_4(original);
+}
+
 void PointCloudDensityDilator::process_group(const std::vector<std::array<float, 4>>& group) {
     if (group.empty() || m_se_count == 0) return;
     if (m_hash.is_full()) {
@@ -125,7 +131,7 @@ void PointCloudDensityDilator::dispatch_dilation(uint32_t input_count) {
 
     glUseProgram(m_prog_dilate);
     glUniform1ui(glGetUniformLocation(m_prog_dilate, "u_table_size"),  m_cfg.table_size);
-    glUniform1f (glGetUniformLocation(m_prog_dilate, "u_cell_size"),   m_cfg.min_dens);
+    glUniform1f (glGetUniformLocation(m_prog_dilate, "u_cell_size"),   m_cfg.cell_size);
     glUniform1f (glGetUniformLocation(m_prog_dilate, "u_min_dens"),    m_cfg.min_dens);
     glUniform1f (glGetUniformLocation(m_prog_dilate, "u_max_dens"),    m_cfg.max_dens);
     glUniform1f (glGetUniformLocation(m_prog_dilate, "u_increment"),   m_cfg.increment);

@@ -91,6 +91,12 @@ void PointCloudOrientationDilator::set_structuring_element(
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
+void PointCloudOrientationDilator::upload_original(const std::vector<std::array<float, 3>>& original)
+{
+    if (original.empty()) return;
+    m_hash.upload_points(original);
+}
+
 void PointCloudOrientationDilator::process_group(const std::vector<std::array<float, 3>>& group,
                                                  const std::vector<std::array<float, 3>>& normals) {
     if (group.empty() || m_se_count == 0) return;

@@ -48,6 +48,7 @@ make_eroder_setup(const Point_set& data, const Point_set& se, double min_dist)
         uint32_t t = 1u; while (t < v) t <<= 1; return t;
     };
     const uint32_t table_size = next_pow2(n * 2);
+    const uint32_t se_total = (uint32_t)(se_offsets.size() / 10);
 
     std::cout << "[erode] n=" << n
               << "  table_size=" << table_size
@@ -60,7 +61,7 @@ make_eroder_setup(const Point_set& data, const Point_set& se, double min_dist)
     cfg.table_size = table_size;
     cfg.max_input  = n;
     cfg.max_output = n;
-    cfg.chunk_size = std::min(n, 500'000u);
+    cfg.chunk_size = std::min(n, std::max(1'000u, 500'000u / std::max(1u, se_total)));
 
     return { cfg, se_offsets, input_vec };
 }
@@ -138,7 +139,7 @@ make_density_eroder_setup(const Point_set& data_with_density,
         uint32_t t = 1u; while (t < v) t <<= 1; return t;
     };
     const uint32_t table_size = next_pow2(n * 2);
-    const uint32_t chunk_size = std::min(n, 500'000u);
+    const uint32_t se_total = (uint32_t)(se_offsets.size() / 10);
 
     std::cout << "[erode_density] n=" << n
               << "  table_size=" << table_size
@@ -154,14 +155,14 @@ make_density_eroder_setup(const Point_set& data_with_density,
     cfg.table_size = table_size;
     cfg.max_input  = n;
     cfg.max_output = n;
-    cfg.chunk_size = chunk_size;
+    cfg.chunk_size = std::min(n, std::max(1'000u, 500'000u / std::max(1u, se_total)));
     cfg.max_shell  = (int)std::ceil(max_dens / min_dens) + 1;
 
     return { cfg, se_offsets, input_vec };
 }
 
 // ─── erode_density ────────────────────────────────────────────────────────
-Point_set erode_density(const Point_set& data, const Point_set& se, float increment)
+Point_set erode_density(const Point_set& data, const Point_set& se, float increment = 0.0)
 {
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 
@@ -198,7 +199,7 @@ Point_set erode_density(const Point_set& data, const Point_set& se, float increm
 }
 
 // ─── erode_density_score ──────────────────────────────────────────────────
-Point_set erode_density_score(const Point_set& data, const Point_set& se, float increment)
+Point_set erode_density_score(const Point_set& data, const Point_set& se, float increment = 0.0)
 {
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 
@@ -268,6 +269,7 @@ make_orientation_eroder_setup(const Point_set& data, const Point_set& se, double
         uint32_t t = 1u; while (t < v) t <<= 1; return t;
     };
     const uint32_t table_size = next_pow2(n * 2);
+    const uint32_t se_total = (uint32_t)(se_offsets.size() / 10);
 
     std::cout << "[erode_orientation] n=" << n
               << "  table_size=" << table_size
@@ -280,7 +282,7 @@ make_orientation_eroder_setup(const Point_set& data, const Point_set& se, double
     cfg.table_size = table_size;
     cfg.max_input  = n;
     cfg.max_output = n;
-    cfg.chunk_size = std::min(n, 500'000u);
+    cfg.chunk_size = std::min(n, std::max(1'000u, 500'000u / std::max(1u, se_total)));
 
     return { cfg, se_offsets, input_vec, normals };
 }
@@ -353,13 +355,21 @@ make_brute_eroder_setup(const Point_set& data, const Point_set& se, double min_d
     for (auto it = se.begin(); it != se.end(); ++it)
         se_pts_vec.push_back(se.point(*it));
 
-    // Run WLOP on the plain vector — kernel deduction works reliably
     std::vector<Point> se_ld_pts;
-    CGAL::wlop_simplify_and_regularize_point_set<Concurrency_tag>(
-        se_pts_vec,
-        std::back_inserter(se_ld_pts),
-        CGAL::parameters::neighbor_radius(neighbor_radius)
-                         .require_uniform_sampling(true));
+
+    // Run WLOP on the plain vector — kernel deduction works reliably
+    if (se_pts_vec.size() > 10)
+    {
+        CGAL::wlop_simplify_and_regularize_point_set<Concurrency_tag>(
+            se_pts_vec,
+            std::back_inserter(se_ld_pts),
+            CGAL::parameters::neighbor_radius(neighbor_radius)
+                             .require_uniform_sampling(true));
+    }
+    else
+    {
+        se_ld_pts = se_pts_vec;
+    }
 
     // Convert directly to offsets
     std::vector<std::array<float,3>> se_ld_offsets;
@@ -388,6 +398,7 @@ make_brute_eroder_setup(const Point_set& data, const Point_set& se, double min_d
         uint32_t t = 1u; while (t < v) t <<= 1; return t;
     };
     const uint32_t table_size = next_pow2(n * 2);
+    const uint32_t se_total = (uint32_t)((se_hd_offsets.size() + se_ld_offsets.size()) / 10);
 
     std::cout << "[erode_brute] n=" << n
               << "  table_size=" << table_size
@@ -401,7 +412,7 @@ make_brute_eroder_setup(const Point_set& data, const Point_set& se, double min_d
     cfg.table_size  = table_size;
     cfg.max_input   = n;
     cfg.max_output  = n;
-    cfg.chunk_size  = std::min(n, 500'000u);
+    cfg.chunk_size = std::min(n, std::max(1'000u, 500'000u / std::max(1u, se_total)));
     cfg.angle_ld    = max(angle_ld, angle_hd);
     cfg.angle_hd    = angle_hd;
     cfg.z_axis      = z_axis;

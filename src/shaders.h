@@ -203,12 +203,15 @@ void main() {
     // Clip input density to [min_dens, max_dens]
     float input_density = clamp(input_pt.w, u_min_dens, u_max_dens);
 
-    // Skip SE points whose density falls outside ± half increment of input density
+    if (u_increment == 0.0) {
+    if (input_density > se_pt.w) return;
+        } else {
     if (abs(se_pt.w - input_density) > u_increment * 0.5) return;
+        }
 
     vec3 candidate = input_pt.xyz + se_pt.xyz;
 
-    if (far_enough(candidate, input_pt.w)) {
+    if (far_enough(candidate, input_pt.w * 0.7)) {
         uint slot = atomicAdd(cand_count, 1u);
         if (slot < u_max_cand)
             cand_pts[slot] = vec4(candidate, input_pt.w);
@@ -280,7 +283,7 @@ mat3 rotation_from_normal(vec3 n) {
     n = normalize(n);
 
     // Choose a reference vector not parallel to n to build the tangent
-    vec3 ref = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 ref = abs(n.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
 
     vec3 tangent   = normalize(cross(ref, n));
     vec3 bitangent = cross(n, tangent);
@@ -327,10 +330,10 @@ layout(std430, binding = 4)          buffer OutCount { uint out_count; };
 uniform uint  u_table_size;
 uniform float u_cell_size;
 uniform float u_min_dist_sq;
-uniform uint  u_num_input;     // number of points in this chunk
+uniform uint  u_num_input;
 uniform uint  u_se_count;
 uniform uint  u_max_output;
-uniform uint  u_chunk_offset;  // index of first point in this chunk within in_pts
+uniform uint  u_chunk_offset;
 
 const uint EMPTY_COORD = 0x7FFFFFFFu;
 
@@ -563,8 +566,11 @@ void main() {
     for (uint j = 0u; j < u_se_count; ++j) {
         vec4 se_pt = se_pts[j];
 
-        if (abs(se_pt.w - input_density) > u_increment * 0.5)
-            continue;
+        if (u_increment == 0.0) {
+        if (input_density > se_pt.w) continue;
+            } else {
+        if (abs(se_pt.w - input_density) > u_increment * 0.5) continue;
+            }
 
         if (!has_neighbor(p + se_pt.xyz, min_dist_sq, shells))
             return;
@@ -651,8 +657,11 @@ void main() {
     for (uint j = 0u; j < u_se_count; ++j) {
         vec4 se_pt = se_pts[j];
 
-        if (abs(se_pt.w - input_density) > u_increment * 0.5)
-            continue;
+        if (u_increment == 0.0) {
+        if (input_density > se_pt.w) continue;
+            } else {
+        if (abs(se_pt.w - input_density) > u_increment * 0.5) continue;
+            }
 
         applicable++;
         if (has_neighbor(p + se_pt.xyz, min_dist_sq, shells))
@@ -747,7 +756,7 @@ mat3 rotation_from_normal(vec3 n) {
     n = normalize(n);
 
     // Choose a reference vector not parallel to n to build the tangent
-    vec3 ref = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 ref = abs(n.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
 
     vec3 tangent   = normalize(cross(ref, n));
     vec3 bitangent = cross(n, tangent);
@@ -855,7 +864,7 @@ mat3 rotation_from_normal(vec3 n) {
     n = normalize(n);
 
     // Choose a reference vector not parallel to n to build the tangent
-    vec3 ref = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 ref = abs(n.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
 
     vec3 tangent   = normalize(cross(ref, n));
     vec3 bitangent = cross(n, tangent);
@@ -977,7 +986,7 @@ vec3 dir_from_angles(float theta, float phi) {
 
 mat3 rotation_from_dir(vec3 n) {
     n = normalize(n);
-    vec3 ref = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 ref = abs(n.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent   = normalize(cross(ref, n));
     vec3 bitangent = cross(n, tangent);
     return mat3(tangent, n, bitangent);
@@ -1132,7 +1141,7 @@ vec3 dir_from_angles(float theta, float phi) {
 
 mat3 rotation_from_dir(vec3 n) {
     n = normalize(n);
-    vec3 ref = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 ref = abs(n.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent   = normalize(cross(ref, n));
     vec3 bitangent = cross(n, tangent);
     return mat3(tangent, n, bitangent);
@@ -1167,8 +1176,10 @@ void main() {
     float best_theta    =  0.0;
     float best_phi      = u_z_axis ? PI * 0.5 : 0.0;
 
-    int n_theta = int(ceil(TWO_PI / u_angle_ld));
-    int n_phi   = u_z_axis ? 1 : int(ceil(PI / u_angle_ld));
+    const int MAX_ANGLE_STEPS = 360;
+
+    int n_theta = min(int(ceil(TWO_PI / u_angle_ld)), MAX_ANGLE_STEPS);
+    int n_phi   = u_z_axis ? 1 : min(int(ceil(PI / u_angle_ld)), MAX_ANGLE_STEPS / 2);
 
     for (int it = 0; it < n_theta; ++it) {
         float theta = float(it) * u_angle_ld;
@@ -1192,7 +1203,8 @@ void main() {
     float ref_theta     = best_theta;
     float ref_phi       = best_phi;
 
-    int n_refine = int(ceil(u_angle_ld / u_angle_hd));
+    const int MAX_REFINE_STEPS = 32;
+    int n_refine = min(int(ceil(u_angle_ld / u_angle_hd)), MAX_REFINE_STEPS);
 
     for (int it = -n_refine; it <= n_refine; ++it) {
         float theta = ref_theta + float(it) * u_angle_hd;
@@ -1478,7 +1490,7 @@ uniform uint  u_num_points;
 uniform int   u_max_shell;
 
 const uint EMPTY_COORD = 0x7FFFFFFFu;
-const int  K           = 5;
+const int  K           = 6;
 
 ivec3 cell_coord(vec3 p, float cs) { return ivec3(floor(p / cs)); }
 uint  start_bucket(ivec3 c, uint table_size) {

@@ -43,6 +43,7 @@ public:
     uint32_t remaining()   const { return m_cfg.max_points - m_point_count; }
     bool     is_full()     const { return m_point_count >= m_cfg.max_points; }
     uint32_t upload_points(const std::vector<std::array<float, 3>>& pts);
+    uint32_t upload_points_4(const std::vector<std::array<float, 4>>& pts);
     GLuint   points_ssbo() const { return m_ssbo_points; }
     const SpatialHashConfig& config() const { return m_cfg; }
 

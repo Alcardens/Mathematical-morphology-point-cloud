@@ -332,26 +332,26 @@ PYBIND11_MODULE(morphology, m)
 
     // ── old (CPU) algorithms ──────────────────────────────────────────────
     m.def("erode_old",
-        [](const std::string& data, const std::string& se,
-           const std::string& output) {
-            return run_operation(data, se,
-                [](const Point_set& d, const Point_set& s) {
-                    return erode_old(d, s); },
-                output);
-        },
-        py::arg("data"), py::arg("se"),
-        py::arg("output") = "",
-        "CPU erosion (MATLAB port). Returns algorithm runtime in milliseconds.");
+    [](const std::string& data, const std::string& se, float d_t,
+       const std::string& output) {
+        return run_operation(data, se,
+            [d_t](const Point_set& d, const Point_set& s) {
+                return erode_old(d, s, d_t); },
+            output);
+    },
+    py::arg("data"), py::arg("se"), py::arg("d_t") = 0.f,
+    py::arg("output") = "",
+    "CPU erosion (MATLAB port). Returns algorithm runtime in milliseconds.");
 
     m.def("dilate_old",
-        [](const std::string& data, const std::string& se,
+        [](const std::string& data, const std::string& se, float d_t,
            const std::string& output) {
             return run_operation(data, se,
-                [](const Point_set& d, const Point_set& s) {
-                    return dilate_old(d, s); },
+                [d_t](const Point_set& d, const Point_set& s) {
+                    return dilate_old(d, s, d_t); },
                 output);
         },
-        py::arg("data"), py::arg("se"),
+        py::arg("data"), py::arg("se"), py::arg("d_t") = 0.f,
         py::arg("output") = "",
         "CPU dilation (MATLAB port). Returns algorithm runtime in milliseconds.");
 }

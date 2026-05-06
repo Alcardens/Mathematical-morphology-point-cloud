@@ -26,6 +26,7 @@ public:
     ~PointCloudDilator();
 
     void set_structuring_element(const std::vector<std::array<float, 3>>& se);
+    void upload_original(const std::vector<std::array<float, 3>>& original);
     void process_group(const std::vector<std::array<float, 3>>& group);
 
     uint32_t output_point_count() const { return m_hash.point_count(); }

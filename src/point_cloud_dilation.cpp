@@ -84,6 +84,12 @@ void PointCloudDilator::set_structuring_element(
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
+void PointCloudDilator::upload_original(const std::vector<std::array<float, 3>>& original)
+{
+    if (original.empty()) return;
+    m_hash.upload_points(original);
+}
+
 void PointCloudDilator::process_group(const std::vector<std::array<float, 3>>& group) {
     if (group.empty() || m_se_count == 0) return;
     if (m_hash.is_full()) {
